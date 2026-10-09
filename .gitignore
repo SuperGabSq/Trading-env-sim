@@ -1,0 +1,6 @@
+.env
+.venv/
+.pats_paper_state.json
+.pats_paper_state.tmp
+__pycache__/
+*.pyc

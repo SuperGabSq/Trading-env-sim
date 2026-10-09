@@ -1,0 +1,373 @@
+//@version=6
+// Research prototype based on PATS (Price Action Trading System) - Mack's Second Entry.
+// Calibrated for MES on 5-minute candles.
+// Features: Realistic broker commissions ($0.62/contract), day-trading leverage (2% margin),
+// scalable position sizing (fixed contracts or % of equity with margin guard),
+// PATS second entries plus optional volume-breakout entries when no PATS setup is active,
+// signal bar filter, bar-by-bar stop tightening, and stale order auto-cancellation.
+
+strategy(
+     "PATS Second Entry Calibrated - MES",
+     overlay = true,
+     initial_capital = 10000,
+     currency = currency.USD,
+     pyramiding = 0,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 2,
+     margin_long = 2,         // 2% margen intradía = 50x apalancamiento (habitual en futuros MES)
+     margin_short = 2,        // 2% margen intradía = 50x apalancamiento
+     commission_type = strategy.commission.cash_per_contract,
+     commission_value = 0.62, // Comisión real estándar por contrato MES ($1.24 round-trip)
+     slippage = 1,            // 1 tick de slippage simulado
+     backtest_fill_limits_assumption = 1,
+     calc_on_order_fills = false,
+     calc_on_every_tick = false,
+     process_orders_on_close = false)
+
+// ==========================================
+// 1. INPUTS (Puntos 2 y 3: Comisiones y Apalancamiento)
+// ==========================================
+string sizingMode       = input.string("Fijo", "Modo de posición", options = ["Fijo", "% de Cuenta"])
+int fixedContracts      = input.int(2, "Contratos fijos", minval = 1, tooltip = "Escala el tamaño en contratos fijos (ej. 2 o 3)")
+float riskPercent       = input.float(1.0, "% Riesgo de cuenta", minval = 0.1, maxval = 5.0, tooltip = "Porcentaje de la cuenta arriesgado por trade si el modo es '% de Cuenta'")
+
+int trendBars           = input.int(12, "Filtro tendencia lookback", minval = 2)
+int slopeBars           = input.int(3, "EMA pendiente lookback", minval = 1)
+int maxTradesPerDay     = input.int(5, "Máximo trades al día", minval = 1)
+
+// Objetivos PATS calibrados (6 ticks = 1.5 pts en MES para superar comisiones)
+int targetTicks         = input.int(6, "Target Scalp (ticks | 6 = 1.5 pts)", minval = 1)
+int initialStopTicks    = input.int(8, "Stop inicial de seguridad (ticks)", minval = 1)
+bool enableTightening   = input.bool(true, "Ajustar stop tras la barra de entrada")
+int tightenTicks        = input.int(2, "Distancia de stop en barras siguientes (ticks)", minval = 1)
+
+bool requireEmaTouch    = input.bool(false, "Exigir testeo exacto a EMA 21")
+float signalBarMinExtr  = input.float(0.55, "Calidad vela señal (mínimo % cierre extremo)", minval = 0.5)
+
+bool showVolumeConfirmation = input.bool(true, "Mostrar confirmación de volumen", tooltip = "Solo añade contexto visual; el volumen no bloquea ninguna señal PATS. Compara con la misma franja horaria de sesiones anteriores en gráfico de 5 minutos.")
+float minRelativeVolume = input.float(1.0, "Volumen relativo mínimo", minval = 0.1, maxval = 5.0, step = 0.1, tooltip = "1.0 exige volumen igual o superior al promedio de esa franja horaria.")
+int volumeLookbackSessions = input.int(10, "Sesiones previas para volumen", minval = 2, maxval = 30)
+bool enableVolumeEntries = input.bool(true, "Permitir entradas extra por ruptura con volumen", tooltip = "Módulo secundario: solo opera rupturas con volumen alto cuando no hay una señal ni un conteo PATS activo.")
+int volumeBreakoutLookback = input.int(12, "Ruptura de rango: barras previas", minval = 2, maxval = 100)
+float minEntryRelativeVolume = input.float(1.5, "Volumen relativo para entrada extra", minval = 0.5, maxval = 5.0, step = 0.1, tooltip = "1.5 exige un 50% más de volumen que el promedio de la misma franja horaria.")
+
+bool enableLongs        = input.bool(true, "Habilitar Longs")
+bool enableShorts       = input.bool(true, "Habilitar Shorts")
+bool flattenAtCutoff    = input.bool(true, "Cerrar todo a las 14:30 CT")
+
+string entrySession     = input.session("0835-1430:23456", "Sesión de trading (CT)")
+string sessionTimezone  = "America/Chicago"
+
+// ==========================================
+// 2. CONTEXTO DE MERCADO Y TENDENCIA
+// ==========================================
+float tick = syminfo.mintick
+float tickValue = syminfo.pointvalue * tick // $1.25 en MES
+float ema21 = ta.ema(close, 21)
+
+// Sesión y corte horario
+bool sessionBar = not na(time(timeframe.period, entrySession, sessionTimezone))
+int localYear   = year(time, sessionTimezone)
+int localMonth  = month(time, sessionTimezone)
+int localDay    = dayofmonth(time, sessionTimezone)
+int entryCutoff = timestamp(sessionTimezone, localYear, localMonth, localDay, 14, 30)
+bool insideWindow = sessionBar and time_close < entryCutoff
+bool newDay = ta.change(time("D")) != 0
+
+// Perfil de volumen: compara cada barra elegible con la misma hora de las sesiones anteriores.
+// 08:35–14:20 CT produce 70 barras elegibles en el gráfico calibrado de 5 minutos.
+const int VOLUME_SLOT_COUNT = 70
+var array<float> volumeSlotHistory = array.new_float(VOLUME_SLOT_COUNT * volumeLookbackSessions, na)
+var array<int> volumeSlotWriteIndex = array.new_int(VOLUME_SLOT_COUNT, 0)
+var array<int> volumeSlotSampleCount = array.new_int(VOLUME_SLOT_COUNT, 0)
+
+int minuteOfDay = hour(time, sessionTimezone) * 60 + minute(time, sessionTimezone)
+int volumeSlot = int(math.floor((minuteOfDay - (8 * 60 + 35)) / 5.0))
+bool supportedVolumeTimeframe = timeframe.isminutes and timeframe.multiplier == 5
+float sameSlotAverageVolume = na
+float relativeVolume = na
+bool volumeHistoryReady = false
+
+if insideWindow and supportedVolumeTimeframe and volumeSlot >= 0 and volumeSlot < VOLUME_SLOT_COUNT
+    int slotOffset = volumeSlot * volumeLookbackSessions
+    int priorSamples = array.get(volumeSlotSampleCount, volumeSlot)
+
+    // Build the comparison before adding this bar, avoiding look-ahead and self-inclusion.
+    if priorSamples == volumeLookbackSessions
+        float totalSlotVolume = 0.0
+        for sampleIndex = 0 to volumeLookbackSessions - 1
+            totalSlotVolume += array.get(volumeSlotHistory, slotOffset + sampleIndex)
+        sameSlotAverageVolume := totalSlotVolume / volumeLookbackSessions
+        if not na(volume) and sameSlotAverageVolume > 0
+            relativeVolume := volume / sameSlotAverageVolume
+            volumeHistoryReady := true
+
+    // Keep a rolling history for this exact 5-minute slot across sessions.
+    if not na(volume) and volume > 0
+        int writeIndex = array.get(volumeSlotWriteIndex, volumeSlot)
+        array.set(volumeSlotHistory, slotOffset + writeIndex, volume)
+        array.set(volumeSlotWriteIndex, volumeSlot, (writeIndex + 1) % volumeLookbackSessions)
+        array.set(volumeSlotSampleCount, volumeSlot, math.min(priorSamples + 1, volumeLookbackSessions))
+
+bool volumeConfirmed = volumeHistoryReady and relativeVolume >= minRelativeVolume
+
+// Filtro de Tendencia PATS
+float aboveEmaShare = ta.sma(close > ema21 ? 1.0 : 0.0, trendBars)
+float belowEmaShare = ta.sma(close < ema21 ? 1.0 : 0.0, trendBars)
+bool upBias   = aboveEmaShare > 0.50 and ema21 > ema21[slopeBars]
+bool downBias = belowEmaShare > 0.50 and ema21 < ema21[slopeBars]
+
+bool emaTouched = low <= ema21 and high >= ema21
+
+// Filtro de Inside Bar (se ignoran para conteos)
+bool isInsideBar = high <= high[1] and low >= low[1]
+
+// Filtro de Calidad de Vela de Señal (Signal Bar)
+float barRange = high - low
+bool validLongSignalBar  = barRange > 0 and ((close - low) / barRange) >= signalBarMinExtr and close > open
+bool validShortSignalBar = barRange > 0 and ((high - close) / barRange) >= signalBarMinExtr and close < open
+
+// ==========================================
+// 3. CONTEO DE SEGUNDA ENTRADA
+// ==========================================
+var float longSwingHigh   = na
+var int   longPhase       = 0
+var bool  longTouchedEma  = false
+
+var float shortSwingLow   = na
+var int   shortPhase      = 0
+var bool  shortTouchedEma = false
+
+bool longSignal  = false
+bool shortSignal = false
+
+// Reset por nuevo día o cambio de sesgo
+if newDay or downBias
+    longSwingHigh  := na
+    longPhase      := 0
+    longTouchedEma := false
+
+if newDay or upBias
+    shortSwingLow  := na
+    shortPhase     := 0
+    shortTouchedEma:= false
+
+// --- Conteo 2EL (Long) ---
+if upBias and not isInsideBar
+    if na(longSwingHigh) or high > longSwingHigh
+        longSwingHigh  := high
+        longPhase      := 0
+        longTouchedEma := false
+    else if longPhase == 0 and low < low[1]
+        longPhase      := 1
+        longTouchedEma := emaTouched
+    else if longPhase == 1
+        longTouchedEma := longTouchedEma or emaTouched
+        if high > high[1]
+            longPhase := 2
+    else if longPhase == 2
+        longTouchedEma := longTouchedEma or emaTouched
+        if low < low[1]
+            longPhase := 3
+    else if longPhase == 3
+        longTouchedEma := longTouchedEma or emaTouched
+        if validLongSignalBar and high > high[1] and (not requireEmaTouch or longTouchedEma)
+            longSignal     := true
+            longPhase      := 0
+            longTouchedEma := false
+            longSwingHigh  := na
+
+// --- Conteo 2ES (Short) ---
+if downBias and not isInsideBar
+    if na(shortSwingLow) or low < shortSwingLow
+        shortSwingLow  := low
+        shortPhase     := 0
+        shortTouchedEma:= false
+    else if shortPhase == 0 and high > high[1]
+        shortPhase     := 1
+        shortTouchedEma:= emaTouched
+    else if shortPhase == 1
+        shortTouchedEma:= shortTouchedEma or emaTouched
+        if low < low[1]
+            shortPhase := 2
+    else if shortPhase == 2
+        shortTouchedEma:= shortTouchedEma or emaTouched
+        if high > high[1]
+            shortPhase := 3
+    else if shortPhase == 3
+        shortTouchedEma:= shortTouchedEma or emaTouched
+        if validShortSignalBar and low < low[1] and (not requireEmaTouch or shortTouchedEma)
+            shortSignal     := true
+            shortPhase      := 0
+            shortTouchedEma := false
+            shortSwingLow   := na
+
+// ==========================================
+// 3B. ENTRADAS EXTRA POR RUPTURA CON VOLUMEN
+// Secundarias a PATS: no compiten con una señal ni con un conteo 2E activo.
+// ==========================================
+bool patsSetupInProgress = longPhase > 0 or shortPhase > 0
+float priorRangeHigh = ta.highest(high[1], volumeBreakoutLookback)
+float priorRangeLow  = ta.lowest(low[1], volumeBreakoutLookback)
+bool enoughRelativeVolume = supportedVolumeTimeframe and volumeHistoryReady and relativeVolume >= minEntryRelativeVolume
+
+bool volumeLongSignal = enableVolumeEntries and not longSignal and not shortSignal and not patsSetupInProgress and upBias and enoughRelativeVolume and validLongSignalBar and close > priorRangeHigh
+bool volumeShortSignal = enableVolumeEntries and not longSignal and not shortSignal and not patsSetupInProgress and downBias and enoughRelativeVolume and validShortSignalBar and close < priorRangeLow
+
+// ==========================================
+// 4. GESTIÓN DE RIESGO, APALANCAMIENTO Y ÓRDENES
+// ==========================================
+calcQty(float stopTicks) =>
+    if sizingMode == "Fijo"
+        fixedContracts
+    else
+        float riskUSD = strategy.equity * (riskPercent / 100.0)
+        float tradeRiskUSD = stopTicks * tickValue
+        int calculatedByRisk = math.max(1, math.floor(riskUSD / tradeRiskUSD))
+        
+        // Salvaguarda de margen: no superar el 85% del poder de compra intradía
+        float marginPct = 2.0 // 2% margen intradía (50x apalancamiento)
+        float notional = close * syminfo.pointvalue
+        float marginReq = notional * (marginPct / 100.0)
+        int maxByMargin = math.max(1, math.floor((strategy.equity * 0.85) / marginReq))
+        math.min(calculatedByRisk, maxByMargin)
+
+var int tradesToday       = 0
+var int pendingSide       = 0
+var int pendingOrderBar   = na
+var bool pendingVolumeEntry = false
+var bool activeVolumeEntry  = false
+
+var float currentStopPrice   = na
+var float currentTargetPrice = na
+var int   activeEntryBar     = na
+
+if newDay
+    tradesToday := 0
+
+// Cancelar órdenes pendientes no ejecutadas en la barra siguiente
+if pendingSide != 0 and strategy.position_size == 0
+    if bar_index > pendingOrderBar or not insideWindow
+        strategy.cancel_all()
+        pendingSide := 0
+        pendingOrderBar := na
+        pendingVolumeEntry := false
+
+// Detección de entrada ejecutada
+bool justEnteredLong = strategy.position_size > 0 and strategy.position_size[1] <= 0
+bool justEnteredShort = strategy.position_size < 0 and strategy.position_size[1] >= 0
+
+if justEnteredLong or justEnteredShort
+    activeVolumeEntry := pendingVolumeEntry
+    pendingSide := 0
+    pendingOrderBar := na
+    pendingVolumeEntry := false
+    activeEntryBar := bar_index
+
+// Reset al cerrar posición
+if strategy.position_size == 0 and strategy.position_size[1] != 0
+    currentStopPrice := na
+    currentTargetPrice := na
+    activeEntryBar := na
+    activeVolumeEntry := false
+
+// Ajuste dinámico de stop (tighten bar-by-bar)
+if enableTightening and strategy.position_size > 0 and not na(activeEntryBar) and bar_index > activeEntryBar
+    float tighterStop = low - tightenTicks * tick
+    currentStopPrice := math.max(currentStopPrice, tighterStop)
+    if activeVolumeEntry
+        strategy.exit("Volume Long Exit", from_entry = "Volume Long", stop = currentStopPrice, limit = currentTargetPrice)
+    else
+        strategy.exit("Long Exit", from_entry = "Long", stop = currentStopPrice, limit = currentTargetPrice)
+
+if enableTightening and strategy.position_size < 0 and not na(activeEntryBar) and bar_index > activeEntryBar
+    float tighterStop = high + tightenTicks * tick
+    currentStopPrice := math.min(currentStopPrice, tighterStop)
+    if activeVolumeEntry
+        strategy.exit("Volume Short Exit", from_entry = "Volume Short", stop = currentStopPrice, limit = currentTargetPrice)
+    else
+        strategy.exit("Short Exit", from_entry = "Short", stop = currentStopPrice, limit = currentTargetPrice)
+
+bool canTrade = barstate.isconfirmed and insideWindow and tradesToday < maxTradesPerDay and strategy.position_size == 0 and pendingSide == 0
+
+// --- EJECUCIÓN LONG ---
+if canTrade and enableLongs and longSignal
+    float entryPrice = high + tick
+    currentStopPrice := entryPrice - initialStopTicks * tick
+    currentTargetPrice := entryPrice + targetTicks * tick
+
+    int qtyTotal = calcQty(initialStopTicks)
+
+    tradesToday += 1
+    pendingSide := 1
+    pendingOrderBar := bar_index
+    pendingVolumeEntry := false
+
+    strategy.entry("Long", strategy.long, qty = qtyTotal, stop = entryPrice)
+    strategy.exit("Long Exit", from_entry = "Long", stop = currentStopPrice, limit = currentTargetPrice)
+
+// --- EJECUCIÓN SHORT ---
+if canTrade and enableShorts and shortSignal
+    float entryPrice = low - tick
+    currentStopPrice := entryPrice + initialStopTicks * tick
+    currentTargetPrice := entryPrice - targetTicks * tick
+
+    int qtyTotal = calcQty(initialStopTicks)
+
+    tradesToday += 1
+    pendingSide := -1
+    pendingOrderBar := bar_index
+    pendingVolumeEntry := false
+
+    strategy.entry("Short", strategy.short, qty = qtyTotal, stop = entryPrice)
+    strategy.exit("Short Exit", from_entry = "Short", stop = currentStopPrice, limit = currentTargetPrice)
+
+// --- ENTRADAS EXTRA LONG/SHORT POR VOLUMEN ---
+if canTrade and volumeLongSignal
+    float entryPrice = high + tick
+    currentStopPrice := entryPrice - initialStopTicks * tick
+    currentTargetPrice := entryPrice + targetTicks * tick
+
+    int qtyTotal = calcQty(initialStopTicks)
+
+    tradesToday += 1
+    pendingSide := 1
+    pendingOrderBar := bar_index
+    pendingVolumeEntry := true
+
+    strategy.entry("Volume Long", strategy.long, qty = qtyTotal, stop = entryPrice)
+    strategy.exit("Volume Long Exit", from_entry = "Volume Long", stop = currentStopPrice, limit = currentTargetPrice)
+
+if canTrade and volumeShortSignal
+    float entryPrice = low - tick
+    currentStopPrice := entryPrice + initialStopTicks * tick
+    currentTargetPrice := entryPrice - targetTicks * tick
+
+    int qtyTotal = calcQty(initialStopTicks)
+
+    tradesToday += 1
+    pendingSide := -1
+    pendingOrderBar := bar_index
+    pendingVolumeEntry := true
+
+    strategy.entry("Volume Short", strategy.short, qty = qtyTotal, stop = entryPrice)
+    strategy.exit("Volume Short Exit", from_entry = "Volume Short", stop = currentStopPrice, limit = currentTargetPrice)
+
+// Cierre al final de la sesión
+if flattenAtCutoff and time_close >= entryCutoff and strategy.position_size != 0
+    strategy.close_all("Cutoff 14:30")
+
+// ==========================================
+// 5. VISUALES
+// ==========================================
+plot(ema21, "EMA 21", color = color.orange, linewidth = 2)
+plotshape(longSignal, "2EL", shape.triangleup, location.belowbar, color.lime, size = size.tiny, text = "2EL")
+plotshape(shortSignal, "2ES", shape.triangledown, location.abovebar, color.red, size = size.tiny, text = "2ES")
+plotshape(volumeLongSignal, "Ruptura volumen Long", shape.diamond, location.belowbar, color.aqua, size = size.tiny, text = "VOL L")
+plotshape(volumeShortSignal, "Ruptura volumen Short", shape.diamond, location.abovebar, color.fuchsia, size = size.tiny, text = "VOL S")
+plotshape(longSignal and showVolumeConfirmation and insideWindow and volumeHistoryReady and volumeConfirmed, "2EL volumen confirma", shape.circle, location.belowbar, color.teal, size = size.tiny, text = "V+")
+plotshape(shortSignal and showVolumeConfirmation and insideWindow and volumeHistoryReady and volumeConfirmed, "2ES volumen confirma", shape.circle, location.abovebar, color.teal, size = size.tiny, text = "V+")
+plotshape(longSignal and showVolumeConfirmation and insideWindow and volumeHistoryReady and not volumeConfirmed, "2EL volumen bajo", shape.circle, location.belowbar, color.gray, size = size.tiny, text = "V-")
+plotshape(shortSignal and showVolumeConfirmation and insideWindow and volumeHistoryReady and not volumeConfirmed, "2ES volumen bajo", shape.circle, location.abovebar, color.gray, size = size.tiny, text = "V-")
+plotshape(longSignal and showVolumeConfirmation and insideWindow and not volumeHistoryReady, "2EL sin historial de volumen", shape.circle, location.belowbar, color.silver, size = size.tiny, text = "V?")
+plotshape(shortSignal and showVolumeConfirmation and insideWindow and not volumeHistoryReady, "2ES sin historial de volumen", shape.circle, location.abovebar, color.silver, size = size.tiny, text = "V?")
