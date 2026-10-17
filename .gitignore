@@ -1,6 +1,22 @@
-.env
+# Python
 .venv/
-.pats_paper_state.json
-.pats_paper_state.tmp
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+
+# Local data and state (market data, databases, logs)
+data/*
+!data/.gitkeep
+
+# Secrets
+.env
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

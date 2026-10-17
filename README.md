@@ -1,58 +1,328 @@
-# PATS paper-trading starter
+# Trading Env Sim
 
-This project contains a Python signal engine and an Alpaca **paper-only** runner for the PATS second-entry strategy in the attached Pine text. The runner defaults to `SPY`; it uses five-minute IEX stock bars and has no live-trading mode.
+A local, TradingView-style simulator built for **futures**. It runs on your computer and your browser
+is the screen. You can:
 
-## Instrument and conversion assumptions
+- chart and paper trade by hand,
+- replay any past session bar by bar,
+- backtest Python strategies,
+- run the same strategies inside replays and live sessions,
+- connect external bots through an API, and
+- paper trade on real-time data.
 
-The Pine strategy is calibrated for MES futures. Alpaca's Trading API supports stocks, ETFs, options, and crypto; its current docs list futures as a roadmap item. This runner therefore applies the MES price-action rules to SPY shares. That is a proxy experiment, not a MES backtest or a contract-for-contract equivalent.
+One engine computes every fill, fee, margin call and roll, so a strategy behaves the same in a
+backtest, a replay and live.
 
-The default conversion assumes 1.00 MES index point is about $0.10 of SPY price movement and one MES contract is about 50 SPY shares. With the Pine defaults, two contracts map to 100 shares, a 6-tick target maps to $0.15, an 8-tick stop to $0.20, and a 2-tick tightening step to $0.05. These are explicit starting assumptions; SPY tracking, share price, market structure, and Alpaca buying power differ from MES. QQQ tracks a different index. Do not use the defaults for QQQ without recalibrating `MES_POINT_TO_STOCK_DOLLARS` and `PATS_SHARES_PER_MES_CONTRACT` in `.env`.
+See [ROADMAP.md](ROADMAP.md) for the phased plan and what comes next.
 
-The strategy's MES commission and 2% futures margin settings are not applied to stock orders. The runner sizes in shares, limits notional to 85% of Alpaca buying power, and retains the five-trade daily cap. Alpaca stock paper fills and order handling also differ from TradingView's futures emulator.
+---
 
-The attached Pine text is the translation source. The workspace file `PATS_Second_Entry_MES.pine` contains an additional relative-volume breakout module that is not in the attached text and is not ported here.
+## Start it (Windows)
 
-## Setup on Windows PowerShell
+1. Install **Python 3.10 or newer** from python.org. Tick "Add python.exe to PATH".
+2. Double-click **`start.bat`**, or run `.\start.ps1` in PowerShell.
 
-1. Create API keys for the **paper account** in Alpaca. Keep the key ID and secret private; do not paste them into chat or commit them.
-2. In this folder, create and activate a virtual environment, then install the dependencies:
+The first start does three things:
 
-   ```powershell
-   py -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   ```
+- creates `.venv`,
+- installs the packages,
+- generates one year of synthetic MES/MNQ sample data. This data is marked "sample" everywhere in the
+  app; it is not real prices.
 
-3. Copy `.env.example` to `.env` and put the paper key ID and secret in the first two fields. Review the proxy assumptions below before submitting orders.
-4. Start in signal-only mode:
+Your browser then opens at http://127.0.0.1:8000. Press `Ctrl+C` in the window to stop the app.
 
-   ```powershell
-   python .\alpaca_paper_bot.py --symbol SPY
-   ```
+To use real prices, open **Data → Free ES/NQ minute bars → Download and import**. Details are under
+[Market data](#market-data).
 
-   It prints PATS signals and sends no orders. Stop it with `Ctrl+C`.
-5. To enable orders in the Alpaca paper account, run:
+Node.js is only needed if you change the web UI. The built UI ships in `frontend/dist`.
 
-   ```powershell
-   python .\alpaca_paper_bot.py --symbol SPY --submit-orders
-   ```
+---
 
-`paper=True` is hard-coded in the Alpaca client. The screenshot endpoint includes `/v2`; `alpaca-py` selects the paper API host itself and appends the API route, so the script does not need a separate endpoint setting.
+## What you can do
 
-## What the runner does
+### Trade page: charts, manual trading, bar replay
 
-- Replays recent closed bars to initialize EMA and PATS counting, then only acts on newly closed bars.
-- Uses the attached defaults: EMA 21, trend lookback 12, EMA slope 3, 55% signal-bar close quality, six-tick target, eight-tick initial stop, two-tick bar-by-bar tightening, five trades per day, and 08:35–14:30 Central time.
-- Places a stop-entry bracket order with a take-profit and stop-loss. An unfilled entry is canceled after its next five-minute bar. The bot cancels open orders and closes a position at the 14:30 Central cutoff.
-- Uses an 85% buying-power ceiling. `PATS_SIZING_MODE=fixed` maps the Pine fixed-contract setting to shares; `PATS_SIZING_MODE=risk_percent` sizes from account equity and the stop distance.
-- Refuses to start if the selected symbol already has a position or open order in the paper account. The local daily counter is saved in `.pats_paper_state.json`.
+**Charts**
+- Candles and volume, from 1m to 1W, shown in exchange time (CT for CME).
+- Indicators: EMA, SMA, session VWAP, Bollinger Bands, RSI, ATR. They are computed by the same Python
+  code that strategies use.
+- Drawings: level, trend line and box. They are saved per symbol.
+- A back-adjusted view that removes roll gaps.
 
-Keep the process running through the 14:30 Central cutoff. If you stop it or it exits unexpectedly before then, the attached bracket exits remain with Alpaca, but the bot can no longer tighten the stop or enforce the cutoff. Check and manage any open SPY orders or position in the paper dashboard before restarting.
+**Start replay**
+- Pick instruments and a start time.
+- Play at 1x up to Max speed, or step one bar at a time (→ key).
+- Charts never show data past the replay clock.
+- The ribbon under the chart shows where you are in the trading day: overnight, regular hours and the
+  15:45 CT switch to overnight margin. Click ahead on it to fast-forward.
 
-Alpaca paper trading is a simulation. Its fills do not reproduce queue position, market impact, or all live slippage. The runner has not been connected to your account or used to submit a paper order because your private paper keys were not provided. Confirm the bracket-order behavior in Alpaca's paper dashboard before relying on the run.
+**Orders**
+- Use the order ticket (market / limit / stop, with an optional bracket in ticks).
+- Right-click the chart to place a limit or stop at that price.
+- Drag order lines to move them.
 
-## Files
+**Hotkeys:** `Shift+B` buy, `Shift+S` sell, `Shift+F` flatten, `Shift+C` cancel all, `Space`
+play/pause.
 
-- `pats_engine.py` — broker-independent PATS signal-state translation.
-- `alpaca_paper_bot.py` — Alpaca market-data, paper-order, cutoff, and position-management loop.
-- `.env.example` — paper-key and conversion settings template.
+**Tables** show positions, working orders, fills, trades (with MAE/MFE) and daily P&L. Trades and
+fills export to CSV.
+
+**Strategies tab:** runs any strategy from `strategies/` inside the current replay or live session.
+It trades the session's account; you can stop it alone or stop it and flatten its position.
+
+### Backtest page
+
+- Runs a strategy over history with all its parameters.
+- **Report:**
+  - equity and drawdown chart
+  - P&L, win rate, profit factor, expectancy in ticks
+  - Sharpe/Sortino and max drawdown
+  - fees as a share of gross profit
+  - P&L by hour, weekday and month, plus long vs short
+  - every trade, with a chart of that trade
+- **Parameter sweeps:** a grid such as `4,6,8` or `4..12 step 2`, ranked by the metric you pick.
+- **History:** every run is saved, including runs from external bots.
+- Strategy files reload on each run, so edit and run again.
+
+### Live paper trading ("Go live")
+
+| Source | Data | Cost |
+|---|---|---|
+| Simulated live | stored minute bars streamed as ticks and quotes at real-time speed (any hour, weekends) | free |
+| Binance perpetuals | real-time trades and bid/ask, BTCUSDT and ETHUSDT | free, no account |
+| Interactive Brokers | real-time CME trades and bid/ask through TWS / IB Gateway (`pip install ib_async`) | about $1.25/month CME top-of-book |
+
+- Orders always fill in this simulator, never at a broker.
+- A live session is saved every 10 seconds. If the app restarts, it resumes the account, positions,
+  working orders and attached strategies.
+- When the feed provides bid/ask quotes, market and stop orders fill at the real bid/ask.
+
+### Bots & API page
+
+- External bots use the REST API and the `/ws` event stream to trade a running session.
+- Over `/ws/bot` the simulator runs a lock-step backtest: it replays history and waits for the bot after
+  every bar. See [Bots](#bots-and-the-api).
+
+---
+
+## Market data
+
+Each instrument is stored as one continuous front-month series in `data/bars/<SYMBOL>/`. Prices are the
+traded (unadjusted) prices of each contract. Roll times and gaps are recorded, which lets the chart offer
+a back-adjusted view and lets open positions and orders roll correctly.
+
+**Free ES/NQ minute bars (BARS on GitHub)**
+
+Data → *Free ES/NQ minute bars*, or `python -m sim data bars --root ES`.
+
+- **Coverage:** real 1-minute E-mini history, ES from June 2025 and NQ from June 2024.
+- **Stored as micros by default.** ES is stored as MES and NQ as MNQ. Micros trade at the same index
+  level, so the bars drive micro tick values, fees and margin.
+- **Rolls repaired.** The repository switches contract at 00:00 ET a day or two before expiry, in the
+  middle of a session and days after volume has moved. Imported as-is, each switch would look like a
+  +50..70 point ES (+200..320 NQ) jump and be booked as P&L. The importer detects every switch, records it
+  as a roll with its gap and labels each bar with its contract month. For ES (Dec 2025 onwards) the
+  per-contract IBKR files move the roll to the usual volume roll and rebuild the thin expiry days.
+- **Quality check:** when both are on the same contract, the ES series matches IBKR's own contract data
+  on 99.4% of minutes (all within one tick).
+- **Caveats:**
+  - The repository has no license, so use it for personal research only and don't push it to a public
+    repo. `data/` is git-ignored.
+  - It is stitched from several sources; about 5% of the oldest NQ bars (mid-2024) have no volume.
+
+**Databento (CME, paid with free credit)**
+
+Data → *Download CME futures from Databento*, or `python -m sim data databento --symbol MES --start
+2025-01-01 --end 2026-10-01`.
+
+- It downloads every contract month and stitches them by volume roll.
+- New accounts get $125 of free credit.
+- The cost is shown before anything is downloaded.
+- Put `DATABENTO_API_KEY` in `.env`.
+
+**Your own files**
+
+Data → *Import a file*, or `python -m sim data import file.csv --symbol MES`. Supported formats:
+
+- TradingView exports
+- NinjaTrader `.txt` exports (bar-close times are handled)
+- Databento CSV or `.dbn.zst` files
+- any CSV with time/open/high/low/close/volume columns
+
+Files with a contract column are stitched into a continuous series automatically.
+
+**Crypto perpetuals**
+
+Data → *Download crypto perpetuals*, or `python -m sim data binance --symbol BTCUSDT --days 60`.
+
+**Contract specs**
+
+`config/contracts.yaml` defines tick size and value, sessions, margins, fees and typical spreads. The
+margin and fee values are approximate starting points; edit them to match your broker.
+
+---
+
+## How fills are simulated
+
+The full rules are at the top of `backend/sim/engine/engine.py`. In short:
+
+- **Prices arrive as points.**
+  - A 1-minute bar becomes four points: open, then high or low, then the other, then close. The order
+    follows TradingView's heuristic, or a worst-case setting.
+  - Live data arrives tick by tick.
+  - Backtests, replays and live sessions all use the same matching code.
+- **Market and stop orders cross the bid-ask spread.**
+  - With live quotes, they fill at the real bid/ask.
+  - Otherwise they pay half the contract's typical spread, rounded up to a tick. The spread is wider
+    overnight and in the opening minute (for MES that means 1 tick most of the time).
+  - Optional extra slippage ticks can be added on top.
+  - Stops that price gaps through fill at the gap price.
+- **Limit orders fill only when price trades through them.** The default is 1 tick through, the same as
+  TradingView's `backtest_fill_limits_assumption = 1`. On a gap they fill at the better price.
+- **Orders only see prices that arrive after they are sent,** plus optional latency.
+- **Optional partial fills:** fills are capped at a share of traded volume, and bracket legs grow with
+  each partial fill.
+- **Margin**
+  - Intraday margin applies until 15:45 CT, then overnight margin.
+  - Positions are liquidated if equity falls below maintenance margin, or if the account cannot carry
+    them overnight.
+  - Optional daily loss limit and max position.
+- **Rolls**
+  - Positions and working orders move to the new contract with the price gap. The roll does not change
+    your P&L.
+  - Roll fees are optional.
+
+Checks behind this:
+- 56 engine scenario tests.
+- A strategy running in a replay session produces exactly the same trades as the backtester.
+- A lock-step external bot produces exactly the same trades as the same logic written as a built-in
+  strategy.
+
+---
+
+## Writing a strategy
+
+Create a file in `strategies/`; it shows up in the app automatically.
+
+```python
+from sim.indicators import EMA, ATR
+from sim.strategy import Bar, Param, Strategy
+
+class EmaCross(Strategy):
+    """Shown in the app as the description."""
+    timeframe = "15m"
+    symbol = "MES"
+    warmup = 200                      # bars before the start used to warm up indicators and state
+    params = {"fast": Param(9, min=2, max=50), "slow": Param(21, min=5, max=200)}
+
+    def on_start(self):
+        self.fast = self.indicator(EMA(self.p.fast))
+        self.slow = self.indicator(EMA(self.p.slow))
+
+    def on_bar(self, bar: Bar):       # called when a bar CLOSES; orders act from the next price
+        if self.fast[-1] > self.slow[-1] and self.position <= 0:
+            self.buy(1, tp_ticks=32, sl_ticks=16)
+```
+
+**Data and helpers**
+- `self.bars` holds the closed bars.
+- `self.position` and `self.entry_price` describe the position; `self.equity` is the account equity.
+- `self.open_orders` lists this strategy's working orders; `self.last_price` is the latest price.
+- `self.time` and `self.local_time` give the current time.
+- `self.minute_of_day(ts)` and `self.in_window(bar, "08:35", "14:30")` help with time windows.
+- `self.trade_date(bar)`, `self.tick`, `self.round_price()` and `self.log()` are also available.
+
+**Orders**
+- `self.buy(qty, price=…, stop=…, tp=…, sl=…, tp_ticks=…, sl_ticks=…, tif="day", oco="group",
+  trail_ticks=…)`, and `self.sell(...)` with the same arguments.
+- `self.modify(order, price=…, stop=…)`, `self.cancel(order)`, `self.cancel_all()`,
+  `self.close()`.
+
+**Hooks:** `on_start`, `on_bar`, `on_fill`, `on_order`, `on_day_end`, `on_stop`.
+
+**Examples**
+- `pats_second_entry.py` is your PATS strategy, ported from the Pine script.
+  - It trades real MES contracts with real fees and margin.
+  - Its signal logic matches the old `pats_engine.py` exactly; a test checks this against
+    `backend/tests/reference/pats_engine_ref.py`.
+  - One change from the old Python port: the day reset follows the 17:00 CT session start, like
+    TradingView's `time("D")`.
+- `ema_crossover.py` and `opening_range_breakout.py` are smaller examples.
+
+---
+
+## Bots and the API
+
+**Trade a running session**
+
+Start a replay or live session, then call the REST API from your bot. The interactive reference is at
+http://127.0.0.1:8000/docs. The single-file Python client `clients/python/tsim_client.py` wraps it:
+
+```python
+sim = TsimClient("http://127.0.0.1:8000")
+sim.buy("MES", 1, tp_ticks=8, sl_ticks=8)
+async for msg in sim.events(symbol="MES", tf="5m"): ...
+```
+
+**Lock-step backtests**
+
+`clients/python/examples/lockstep_ema_bot.py` runs a bot in another process over `/ws/bot`. The
+simulator waits for the bot after each bar, and the report lands in Backtest history.
+
+**From another computer**
+
+Set `TSIM_HOST=0.0.0.0` and `TSIM_API_KEY=...` in `.env`. Remote clients then send `X-API-Key`; local
+clients never need it.
+
+---
+
+## Command line
+
+```powershell
+.venv\Scripts\python -m sim                      # start the app (same as start.bat)
+.venv\Scripts\python -m sim data list
+.venv\Scripts\python -m sim data bars --root ES  # free real ES minute bars, stored as MES
+.venv\Scripts\python -m sim data import export.csv --symbol MES --tz America/Chicago
+.venv\Scripts\python -m sim data databento --symbol MES --start 2025-01-01 --end 2026-10-01
+.venv\Scripts\python -m sim data binance --symbol BTCUSDT --days 60
+.venv\Scripts\python -m sim data generate --days 365
+.venv\Scripts\python -m sim backtest pats_second_entry --start 2026-01-01 --param target_ticks=8 --out report.json
+.venv\Scripts\python -m pytest                   # 95 tests
+```
+
+---
+
+## Project layout
+
+```
+backend/sim/
+  contracts.py     contract registry + CME session calendar
+  data/            Parquet store, resampling, continuous contracts, importers, synthetic data
+  engine/          orders, matching, positions, fees, margin, rolls
+  indicators.py    indicators shared by chart and strategies
+  session.py       replay and live sessions (clock, feeds, strategies)
+  feeds/           simulated, Binance and IBKR live feeds
+  strategy/        Strategy API, backtest runner, statistics, in-session runner
+  api/             REST + WebSocket endpoints
+backend/tests/     95 tests (engine scenarios, data, indicators, strategies, API, live)
+frontend/          React + TypeScript + Lightweight Charts (built into frontend/dist)
+strategies/        your strategies
+clients/python/    Python client and example bots
+config/            contracts.yaml
+data/              market data, SQLite state, downloads (git-ignored)
+```
+
+To work on the UI: run `npm install` once, then `npm run dev` in `frontend/` while the app runs; the dev
+server is http://127.0.0.1:5173. When you're done, run `npm run build`.
+
+---
+
+## Known limitations
+
+- Fills come from 1-minute bars (or ticks when live), not from order-book queue position. There is no
+  level-2 or depth-of-market (DOM) simulation yet; it is a candidate for Phase 8.
+- The ES/NQ bars from BARS and the volumes of micro contracts are approximations. For decisions with
+  real money, validate on Databento data.
+- The IBKR feed is written against the `ib_async` API but could not be tested here without a TWS
+  connection. The Binance feed is tested with recorded messages, not the live network.
+- Exchange margins and broker fees change often; keep `config/contracts.yaml` up to date.

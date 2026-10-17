@@ -1,0 +1,166 @@
+# Contract registry.
+#
+# Margins and fees are APPROXIMATE starting values. Exchange margins change often and every broker
+# sets its own day-trade margin and commission, so edit these to match your broker.
+#
+#   tick_size        minimum price increment
+#   tick_value       USD value of one tick for one contract   (point value = tick_value / tick_size)
+#   margin.intraday  margin per contract while the day-trade window is open
+#   margin.initial   overnight margin per contract (applies from session.day_margin_end until the next open)
+#   margin.maintenance  equity per contract below which an overnight position is liquidated
+#   fees_per_side    commission + exchange + clearing + NFA, per contract, per side
+#   spread_ticks     typical bid-ask spread in ticks: regular hours, overnight, and the first minute after
+#                    the regular-hours open. Market/stop orders pay half of it (rounded up to a tick)
+#                    unless a live feed provides real quotes.
+#   roll_days        calendar days before expiry when the continuous series moves to the next contract
+#   synthetic        parameters for the sample-data generator only
+
+sessions:
+  cme_equity:
+    tz: America/Chicago
+    open: "17:00"           # the session opens the previous evening (Sun 17:00 opens Monday's session)
+    close: "16:00"
+    open_days: [sun, mon, tue, wed, thu]
+    rth: ["08:30", "15:00"]
+    day_margin_end: "15:45" # after this time overnight (initial) margin applies
+  cme_metals_energy:
+    tz: America/Chicago
+    open: "17:00"
+    close: "16:00"
+    open_days: [sun, mon, tue, wed, thu]
+    rth: ["08:20", "13:30"]
+    day_margin_end: "15:45"
+  crypto_24x7:
+    tz: UTC
+    open: "00:00"
+    close: "24:00"
+    open_days: [sun, mon, tue, wed, thu, fri, sat]
+    rth: ["00:00", "24:00"]
+    day_margin_end: null    # crypto perps: one margin level all the time
+
+contracts:
+  MES:
+    name: Micro E-mini S&P 500
+    exchange: CME
+    tick_size: 0.25
+    tick_value: 1.25
+    session: cme_equity
+    months: HMUZ
+    roll_days: 8
+    margin: {intraday: 50, initial: 2400, maintenance: 2200}
+    fees_per_side: 0.62
+    spread_ticks: {rth: 1, eth: 1, open: 2}
+    synthetic: {start_price: 6650, annual_vol: 0.14, drift: 0.06, basis_rate: 0.03, base_volume: 2200}
+
+  ES:
+    name: E-mini S&P 500
+    exchange: CME
+    tick_size: 0.25
+    tick_value: 12.50
+    session: cme_equity
+    months: HMUZ
+    roll_days: 8
+    margin: {intraday: 500, initial: 24000, maintenance: 22000}
+    fees_per_side: 2.25
+    spread_ticks: {rth: 1, eth: 1, open: 2}
+
+  MNQ:
+    name: Micro E-mini Nasdaq-100
+    exchange: CME
+    tick_size: 0.25
+    tick_value: 0.50
+    session: cme_equity
+    months: HMUZ
+    roll_days: 8
+    margin: {intraday: 100, initial: 3500, maintenance: 3200}
+    fees_per_side: 0.62
+    spread_ticks: {rth: 1, eth: 2, open: 3}
+    synthetic: {start_price: 24500, annual_vol: 0.19, drift: 0.08, basis_rate: 0.03, base_volume: 2600}
+
+  NQ:
+    name: E-mini Nasdaq-100
+    exchange: CME
+    tick_size: 0.25
+    tick_value: 5.00
+    session: cme_equity
+    months: HMUZ
+    roll_days: 8
+    margin: {intraday: 1000, initial: 35000, maintenance: 32000}
+    fees_per_side: 2.25
+    spread_ticks: {rth: 1, eth: 2, open: 3}
+
+  M2K:
+    name: Micro E-mini Russell 2000
+    exchange: CME
+    tick_size: 0.10
+    tick_value: 0.50
+    session: cme_equity
+    months: HMUZ
+    roll_days: 8
+    margin: {intraday: 50, initial: 950, maintenance: 860}
+    fees_per_side: 0.62
+    spread_ticks: {rth: 1, eth: 2, open: 3}
+
+  MYM:
+    name: Micro E-mini Dow
+    exchange: CBOT
+    tick_size: 1.0
+    tick_value: 0.50
+    session: cme_equity
+    months: HMUZ
+    roll_days: 8
+    margin: {intraday: 50, initial: 1700, maintenance: 1550}
+    fees_per_side: 0.62
+    spread_ticks: {rth: 1, eth: 2, open: 2}
+
+  MGC:
+    name: Micro Gold
+    exchange: COMEX
+    tick_size: 0.10
+    tick_value: 1.00
+    session: cme_metals_energy
+    months: GJMQVZ
+    roll_days: 3
+    margin: {intraday: 100, initial: 2600, maintenance: 2400}
+    fees_per_side: 0.62
+    spread_ticks: {rth: 1, eth: 2, open: 2}
+
+  MCL:
+    name: Micro WTI Crude Oil
+    exchange: NYMEX
+    tick_size: 0.01
+    tick_value: 1.00
+    session: cme_metals_energy
+    months: FGHJKMNQUVXZ
+    roll_days: 3
+    margin: {intraday: 100, initial: 800, maintenance: 730}
+    fees_per_side: 0.62
+    spread_ticks: {rth: 1, eth: 2, open: 2}
+
+  # Crypto perpetual futures (public data from Binance USD-M). One contract = 0.01 BTC / 0.1 ETH here;
+  # change multiplier-related values (tick_value) if you prefer another contract size.
+  BTCUSDT:
+    name: BTC/USDT Perpetual (0.01 BTC per contract)
+    exchange: BINANCE
+    tick_size: 0.10
+    tick_value: 0.001
+    session: crypto_24x7
+    months: ""
+    perpetual: true
+    margin: {intraday: 0, initial: 0, maintenance: 0, initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side_rate: 0.0004   # 0.04% taker fee on notional
+    fees_per_side: 0
+    spread_ticks: {rth: 1, eth: 1, open: 1}
+
+  ETHUSDT:
+    name: ETH/USDT Perpetual (0.1 ETH per contract)
+    exchange: BINANCE
+    tick_size: 0.01
+    tick_value: 0.001
+    session: crypto_24x7
+    months: ""
+    perpetual: true
+    margin: {intraday: 0, initial: 0, maintenance: 0, initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side_rate: 0.0004
+    fees_per_side: 0
+    spread_ticks: {rth: 1, eth: 1, open: 1}
