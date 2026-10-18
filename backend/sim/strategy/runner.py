@@ -239,7 +239,7 @@ class BacktestSim:
         trades = [t.to_dict() for t in acct.trades]
         eq_ts_a, eq_v_a = np.array(self.eq_ts, dtype="int64"), np.array(self.eq_v, dtype=float)
         stats = compute_stats(trades, eq_ts_a, eq_v_a, acct.days, self.cfg.balance, self.spec.tick_value,
-                              self.spec.session.tz)
+                              self.spec.session.tz, tick_size=self.spec.tick_size)
         return {
             "strategy": name,
             "config": asdict(self.cfg) | {"params": params, "start_ts": self.first_ts, "end_ts": int(self.ex.ts[-1]) + 60},

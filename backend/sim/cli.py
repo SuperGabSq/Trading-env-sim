@@ -64,6 +64,36 @@ def cmd_data(a) -> None:
     elif a.data_cmd == "binance":
         m = importers.import_binance(a.symbol, a.days)
         print(f"imported {m.symbol}: {m.rows:,} bars")
+    elif a.data_cmd == "download":
+        from .contracts import registry
+        from .data import free_sources as fs
+        groups = {"crypto": ["crypto"], "forex": ["forex"], "stocks": ["stock"], "etfs": ["etf"],
+                  "all": ["crypto", "forex", "stock", "etf"]}
+        syms: list[str] = []
+        for x in a.symbols:
+            if x.lower() in groups:
+                syms += [c.symbol for c in registry().all() if c.asset_class in groups[x.lower()]]
+            else:
+                syms.append(x.upper())
+        failed = 0
+        for sym in syms:
+            last = [0.0]
+
+            def progress(msg, frac=None):
+                if frac is None or frac - last[0] >= 0.05 or frac >= 1:
+                    last[0] = frac if frac is not None else last[0]
+                    print(f"  {msg}" + (f"  {frac:.0%}" if frac is not None else ""), flush=True)
+
+            try:
+                m = fs.download(sym, a.source, a.start, a.end, progress, interval=a.interval,
+                                spread=not a.bid_only)
+                print(f"{m.symbol}: {m.rows:,} {m.base_tf} bars, {_fmt_ts(m.first_ts)} -> {_fmt_ts(m.last_ts)} UTC "
+                      f"[{m.source}]" + (f"\n  {m.notes}" if m.notes else ""))
+            except Exception as e:
+                failed += 1
+                print(f"{sym}: FAILED: {e}")
+        if failed:
+            sys.exit(1)
     elif a.data_cmd == "delete":
         store().delete(a.symbol)
         print(f"deleted {a.symbol}")
@@ -133,6 +163,14 @@ def main(argv: list[str] | None = None) -> None:
     b = dsub.add_parser("binance", help="download Binance USD-M perpetual 1m klines (free)")
     b.add_argument("--symbol", default="BTCUSDT")
     b.add_argument("--days", type=int, default=30)
+    dl = dsub.add_parser("download", help="free history for crypto (Binance), forex/gold (Dukascopy), "
+                                           "stocks/ETFs (Alpaca key or Yahoo)")
+    dl.add_argument("symbols", nargs="+", help="e.g. BTCUSDT EURUSD XAUUSD SPY AAPL, or: crypto forex stocks etfs all")
+    dl.add_argument("--source", default="auto", choices=["auto", "binance", "dukascopy", "alpaca", "yahoo"])
+    dl.add_argument("--start", help="YYYY-MM-DD (default: two years ago)")
+    dl.add_argument("--end", help="YYYY-MM-DD (default: today)")
+    dl.add_argument("--interval", default="1m", help="Yahoo bar size: 1m, 5m, 15m, 30m, 1h, 1d")
+    dl.add_argument("--bid-only", action="store_true", help="Dukascopy: bid prices only (half the downloads)")
     x = dsub.add_parser("delete")
     x.add_argument("symbol")
 

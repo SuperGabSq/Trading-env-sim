@@ -222,7 +222,7 @@ def journal_csv():
                 "pnl", "fees", "net", "pnl_ticks", "mae_ticks", "mfe_ticks", "entry_tag", "exit_reason"])
     for t in acct.trades:
         spec = registry().get(t.symbol)
-        ticks = (t.pnl / (t.qty * spec.tick_value)) if t.qty else 0
+        ticks = ((t.exit_price - t.entry_price) * (1 if t.side == 'long' else -1) / spec.tick_size) if t.exit_price is not None else 0
         w.writerow([t.id, t.symbol, t.side, t.qty, _iso(t.entry_ts), t.entry_price, _iso(t.exit_ts), t.exit_price,
                     round(t.pnl, 2), round(t.fees, 2), round(t.net, 2), round(ticks, 2), round(t.mae_ticks, 2),
                     round(t.mfe_ticks, 2), t.entry_tag, t.exit_reason])

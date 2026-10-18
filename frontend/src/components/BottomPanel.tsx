@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api'
-import { fmtMoney, fmtNum, fmtPrice, fmtTime, pnlClass } from '../format'
+import { fmtMoney, fmtNum, fmtPrice, fmtTime, pnlClass, tradeTicks, usdPerPoint } from '../format'
 import { useStore } from '../store'
 import { flatten } from './OrderTicket'
 import StrategyPanel from './StrategyPanel'
@@ -70,7 +70,7 @@ function Positions() {
         {rows.map((p) => {
           const c = contracts.find((x) => x.symbol === p.symbol)
           const lp = last[p.symbol]
-          const pnl = c && lp !== undefined ? (lp - p.avg_price) * p.qty * c.point_value : 0
+          const pnl = c && lp !== undefined ? (lp - p.avg_price) * p.qty * usdPerPoint(c, lp) : 0
           const ticks = c && lp !== undefined ? ((lp - p.avg_price) / c.tick_size) * Math.sign(p.qty) : 0
           return (
             <tr key={p.symbol}>
@@ -173,7 +173,7 @@ function Trades() {
         <tbody>
           {trades.slice().reverse().map((t) => {
             const c = contracts.find((x) => x.symbol === t.symbol)
-            const ticks = c && t.qty ? t.pnl / (t.qty * c.tick_value) : 0
+            const ticks = tradeTicks(t, c)
             return (
               <tr key={t.id}>
                 <td>{fmtTime(t.entry_ts, tz(t.symbol))}</td>

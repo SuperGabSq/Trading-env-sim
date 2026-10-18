@@ -1,4 +1,4 @@
-import{r as i,u as c,a as o,j as e,b as d,p,c as h}from"./index-BwtFe5Aj.js";const m=`from tsim_client import TsimClient      # clients/python/tsim_client.py
+import{r as i,u as c,a as o,j as e,b as d,p,c as h}from"./index-lWgBxb51.js";const m=`from tsim_client import TsimClient      # clients/python/tsim_client.py
 
 sim = TsimClient("http://127.0.0.1:8000")
 print(sim.account())

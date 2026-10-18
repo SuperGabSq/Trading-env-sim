@@ -1,3 +1,5 @@
+import type { AssetClass, ContractInfo } from './types'
+
 const offsetCache = new Map<string, number>()
 const dtfCache = new Map<string, Intl.DateTimeFormat>()
 
@@ -93,4 +95,65 @@ export function fmtNum(v: number | null | undefined, digits = 2): string {
 export function roundTick(p: number, tick: number): number {
   const decimals = (String(tick).split('.')[1] || '').length
   return +(Math.round(p / tick) * tick).toFixed(decimals)
+}
+
+// ---------------------------------------------------------------- instruments
+
+
+export const ASSET_CLASSES: { id: AssetClass; label: string }[] = [
+  { id: 'future', label: 'Futures' },
+  { id: 'crypto', label: 'Crypto' },
+  { id: 'forex', label: 'Forex & gold' },
+  { id: 'stock', label: 'Stocks' },
+  { id: 'etf', label: 'ETFs' },
+]
+
+export const assetLabel = (a: string | undefined) => ASSET_CLASSES.find((x) => x.id === a)?.label ?? 'Other'
+
+/** USD value of a 1.0 price move for one unit of quantity (USD-base forex pairs convert at the price). */
+export function usdPerPoint(c: ContractInfo | undefined, price: number | undefined): number {
+  if (!c) return 0
+  if (c.quote && c.quote !== 'USD') return price ? c.point_value / price : 0
+  return c.point_value
+}
+
+export const tickValueUsd = (c: ContractInfo | undefined, price: number | undefined) =>
+  c ? usdPerPoint(c, price) * c.tick_size : 0
+
+/** Profit in ticks of a closed trade, from its prices (correct for any quote currency). */
+export function tradeTicks(t: { side: string; entry_price: number; exit_price: number | null; qty: number; pnl: number },
+  c: ContractInfo | undefined): number {
+  if (!c) return 0
+  if (t.exit_price === null || t.exit_price === undefined) return t.qty ? t.pnl / (t.qty * c.tick_value) : 0
+  return ((t.exit_price - t.entry_price) / c.tick_size) * (t.side === 'long' ? 1 : -1)
+}
+
+/** Label for the quantity field: Contracts, Shares, Micro lots... */
+export function qtyLabel(c: ContractInfo | undefined): string {
+  if (!c) return 'Contracts'
+  if (c.asset_class === 'stock' || c.asset_class === 'etf') return 'Shares'
+  if (c.unit.startsWith('micro lot')) return 'Micro lots'
+  if (c.unit === 'ounce') return 'Ounces'
+  return 'Contracts'
+}
+
+/** Short explanation of what the quantity means, e.g. "100 = 1 standard lot". */
+export function qtyHint(c: ContractInfo | undefined, qty: number): string {
+  if (!c) return ''
+  if (c.unit.startsWith('micro lot')) {
+    const units = qty * 1000
+    return `${units.toLocaleString('en-US')} ${c.symbol.slice(0, 3)} (${(qty / 100).toLocaleString('en-US', { maximumFractionDigits: 2 })} lots)`
+  }
+  if (c.unit.startsWith('contract (')) return c.unit.replace('contract (', '1 = ').replace(')', '')
+  return ''
+}
+
+/** Grouped and sorted for <optgroup> menus and the watchlist. */
+export function groupByClass<T>(items: T[], cls: (x: T) => string | undefined): { id: string; label: string; items: T[] }[] {
+  const out: { id: string; label: string; items: T[] }[] = []
+  for (const a of [...ASSET_CLASSES.map((x) => x.id as string), 'other']) {
+    const its = items.filter((x) => (cls(x) ?? 'other') === a || (a === 'other' && !ASSET_CLASSES.some((y) => y.id === cls(x))))
+    if (its.length) out.push({ id: a, label: assetLabel(a), items: its })
+  }
+  return out
 }

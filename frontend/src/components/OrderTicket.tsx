@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { api } from '../api'
-import { fmtMoney, fmtPrice, pnlClass, roundTick } from '../format'
+import { fmtMoney, fmtPrice, pnlClass, qtyHint, qtyLabel, roundTick, tickValueUsd, usdPerPoint } from '../format'
 import { useStore } from '../store'
 
 export async function placeOrder(side: 'buy' | 'sell', override: Record<string, unknown> = {}) {
@@ -48,16 +48,21 @@ export default function OrderTicket() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t.type, last === undefined])
 
-  const pnl = pos && pos.qty && last !== undefined && c ? (last - pos.avg_price) * pos.qty * c.point_value : 0
+  const pnl = pos && pos.qty && last !== undefined && c ? (last - pos.avg_price) * pos.qty * usdPerPoint(c, last) : 0
   const working = Object.values(orders).filter((o) => o.symbol === symbol).length
-  const riskPerContract = c ? t.sl * c.tick_value : 0
-  const rewardPerContract = c ? t.tp * c.tick_value : 0
+  const tv = tickValueUsd(c, last)
+  const riskPerContract = c ? t.sl * tv : 0
+  const rewardPerContract = c ? t.tp * tv : 0
+  const feeEst = c ? 2 * t.qty * (c.fees_per_side + (last !== undefined ? Math.abs(last) * usdPerPoint(c, last) * c.fees_per_side_rate : 0)) : 0
+  const feeText = c ? [c.fees_per_side ? `$${c.fees_per_side}/${c.asset_class === 'stock' || c.asset_class === 'etf' ? 'share' : c.unit.startsWith('micro') ? 'micro lot' : 'contract'}` : '',
+    c.fees_per_side_rate ? `${+(c.fees_per_side_rate * 100).toFixed(4)}% of notional` : ''].filter(Boolean).join(' + ') || 'none' : ''
+  const tvText = c ? (tv >= 0.01 ? `$${+tv.toFixed(4)}` : `$${tv.toPrecision(2)}`) : ''
 
   return (
     <aside className="ticket" aria-label="Order ticket">
       <div className="ticket-inner">
         <h3><span>{symbol}</span><span className="num">{last !== undefined ? fmtPrice(last, dec) : ''}</span></h3>
-        <div className="contract">{c ? `${c.name}  |  tick ${c.tick_size} = $${c.tick_value}  |  fee $${c.fees_per_side}/side` : ''}</div>
+        <div className="contract">{c ? `${c.name}  |  tick ${c.tick_size} = ${tvText}${c.quote !== 'USD' ? ' (at this rate)' : ''} per ${qtyLabel(c) === 'Shares' ? 'share' : qtyLabel(c) === 'Micro lots' ? 'micro lot' : qtyLabel(c) === 'Ounces' ? 'ounce' : 'contract'}  |  fee ${feeText} per side` : ''}</div>
         {quote && session?.mode === 'live' && (
           <div className="quote"><span>Bid <b className="down">{fmtPrice(quote.bid, dec)}</b></span><span>Ask <b className="up">{fmtPrice(quote.ask, dec)}</b></span>
             <span className="muted">Spread {Math.round((quote.ask - quote.bid) / tick)} tick{Math.round((quote.ask - quote.bid) / tick) === 1 ? '' : 's'}</span></div>
@@ -72,7 +77,7 @@ export default function OrderTicket() {
         </div>
 
         <div className="row2">
-          <label className="field"><span>Contracts</span>
+          <label className="field"><span title={qtyHint(c, t.qty)}>{qtyLabel(c)}</span>
             <div className="qty">
               <button onClick={() => upd({ qty: Math.max(1, t.qty - 1) })} aria-label="Decrease quantity">-</button>
               <input type="number" min={1} value={t.qty} onChange={(e) => upd({ qty: Math.max(1, Math.floor(+e.target.value || 1)) })} />
@@ -85,6 +90,7 @@ export default function OrderTicket() {
           </label>
         </div>
 
+        {qtyHint(c, t.qty) && <div className="help" style={{ marginTop: -4 }}>{qtyHint(c, t.qty)}{c && last !== undefined ? `  |  notional ${fmtMoney(Math.abs(last) * usdPerPoint(c, last) * t.qty)}` : ''}</div>}
         <label className="check">
           <input type="checkbox" checked={t.bracket} onChange={(e) => upd({ bracket: e.target.checked })} />
           Attach take-profit and stop-loss
@@ -100,7 +106,7 @@ export default function OrderTicket() {
           </div>
         )}
         {t.bracket && c && (
-          <div className="help">Risk {fmtMoney(riskPerContract * t.qty)} to make {fmtMoney(rewardPerContract * t.qty)} plus fees {fmtMoney(c.fees_per_side * 2 * t.qty)}</div>
+          <div className="help">Risk {fmtMoney(riskPerContract * t.qty)} to make {fmtMoney(rewardPerContract * t.qty)} plus fees {fmtMoney(feeEst)}</div>
         )}
         <label className="field"><span>Time in force</span>
           <select value={t.tif} onChange={(e) => upd({ tif: e.target.value as 'gtc' | 'day' })}>

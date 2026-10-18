@@ -224,6 +224,92 @@ async def data_bars(req: BarsReq):
     return _symbol_info(meta.symbol)
 
 
+# ---- free downloads (crypto, forex, stocks, ETFs) with progress ------------------------------------
+
+_jobs: dict[str, dict] = {}
+
+
+@router.get("/data/sources")
+def data_sources():
+    from ..data import free_sources as fs
+    key, secret = fs.alpaca_keys()
+    return {"sources": fs.SOURCES, "alpaca_key_set": bool(key and secret),
+            "yahoo_intervals": list(fs.YAHOO_LIMITS)}
+
+
+class DownloadReq(BaseModel):
+    symbols: list[str]
+    source: str = "auto"
+    start: str | None = None
+    end: str | None = None
+    interval: str = "1m"          # yahoo only
+    spread: bool = True           # dukascopy: bid+ask -> mid and measured spread
+    key: str | None = None        # alpaca (otherwise from .env)
+    secret: str | None = None
+
+
+def _run_download(job: dict, req: DownloadReq) -> None:
+    from ..data import free_sources as fs
+    n = len(req.symbols)
+    for i, sym in enumerate(req.symbols):
+        sym = sym.upper()
+        job["current"] = sym
+
+        def progress(msg: str, frac: float | None = None, i=i):
+            job["message"] = msg
+            if frac is not None:
+                job["progress"] = round((i + max(0.0, min(1.0, frac))) / n, 4)
+
+        try:
+            sess = manager.current
+            if sess and sym in sess.symbols:
+                raise RuntimeError(f"stop the session using {sym} first")
+            meta = fs.download(sym, req.source, req.start, req.end, progress, interval=req.interval,
+                               spread=req.spread, key=req.key, secret=req.secret)
+            job["results"].append({"symbol": sym, "ok": True, "rows": meta.rows, "source": meta.source,
+                                   "first_ts": meta.first_ts, "last_ts": meta.last_ts, "notes": meta.notes})
+        except Exception as e:  # keep going with the other symbols
+            job["results"].append({"symbol": sym, "ok": False, "error": str(e)[:500]})
+        job["progress"] = round((i + 1) / n, 4)
+    _indicator_full.cache_clear()
+    job["status"] = "done"
+    job["current"] = None
+    job["finished_at"] = __import__("time").time()
+
+
+@router.post("/data/download")
+async def data_download(req: DownloadReq):
+    import threading
+    import time as _t
+    import uuid
+    if not req.symbols:
+        raise HTTPException(400, "Choose at least one symbol")
+    for sym in req.symbols:
+        if sym.upper() not in registry():
+            raise HTTPException(400, f"Unknown symbol {sym}")
+    busy = [j for j in _jobs.values() if j["status"] == "running"]
+    if busy:
+        raise HTTPException(409, "A download is already running; wait for it to finish")
+    job = {"id": uuid.uuid4().hex[:10], "status": "running", "symbols": [s.upper() for s in req.symbols],
+           "source": req.source, "progress": 0.0, "message": "starting", "current": None, "results": [],
+           "started_at": _t.time(), "finished_at": None}
+    _jobs[job["id"]] = job
+    threading.Thread(target=_run_download, args=(job, req), daemon=True).start()
+    return job
+
+
+@router.get("/data/jobs")
+def data_jobs():
+    return sorted(_jobs.values(), key=lambda j: -j["started_at"])[:20]
+
+
+@router.get("/data/jobs/{job_id}")
+def data_job(job_id: str):
+    if job_id not in _jobs:
+        raise HTTPException(404, "No such job")
+    return _jobs[job_id]
+
+
 @router.delete("/data/{symbol}")
 def data_delete(symbol: str):
     sess = manager.current

@@ -135,6 +135,22 @@ class SessionSpec:
             midnight = midnight + after.astype("int64") * np.timedelta64(1, "D")
         return midnight.astype("int64")
 
+    def in_session_mask(self, ts: np.ndarray) -> np.ndarray:
+        """Vectorised in_session for an array of UTC epoch seconds."""
+        ts = np.asarray(ts, dtype="int64")
+        if self.is_24h:
+            return np.ones(len(ts), dtype=bool)
+        naive = _naive_local(ts, self.tz)
+        days = naive.astype("datetime64[D]")
+        tod = (naive - days.astype("datetime64[ns]")).astype("int64") // 1_000_000_000
+        wd = (days.astype("int64") + 3) % 7  # 1970-01-01 was a Thursday; Monday = 0
+        o, c = int(self.open.total_seconds()), int(self.close.total_seconds())
+        days_ok = np.isin(wd, self.open_days)
+        prev_ok = np.isin((wd - 1) % 7, self.open_days)
+        if self.overnight:
+            return ((tod >= o) & days_ok) | ((tod < c) & prev_ok)
+        return (tod >= o) & (tod < c) & days_ok
+
     def bucket_starts(self, ts: np.ndarray, minutes: int) -> np.ndarray:
         """Session-aligned bucket start (UTC epoch seconds) for intraday timeframes."""
         ts = np.asarray(ts, dtype="int64")
@@ -165,8 +181,9 @@ class Margin:
     intraday: float = 0.0
     initial: float = 0.0
     maintenance: float = 0.0
-    initial_rate: float = 0.0  # fraction of notional (crypto perps)
+    initial_rate: float = 0.0  # fraction of notional (crypto, forex, stocks)
     maintenance_rate: float = 0.0
+    intraday_rate: float = 0.0  # fraction of notional while day margin applies (stocks: 4x day trading)
 
 
 @dataclass(frozen=True)
@@ -188,10 +205,33 @@ class ContractSpec:
     spread_open: float = 2.0           # first minutes after the regular-hours open
     spread_open_minutes: int = 1
     synthetic: dict = field(default_factory=dict)
+    asset_class: str = "future"        # future | crypto | forex | stock | etf
+    unit: str = "contract"             # what one unit of quantity is, for display
+    quote: str = "USD"                 # currency that prices (and tick_value) are quoted in
+    data: dict = field(default_factory=dict)  # free data source settings (dukascopy code, etc.)
 
     @property
     def point_value(self) -> float:
+        """Value of a 1.0 price move for one unit of quantity, in the QUOTE currency."""
         return self.tick_value / self.tick_size
+
+    @property
+    def inverse_quote(self) -> bool:
+        """USD-base forex pairs (USDJPY, USDCAD, USDCHF): profit is in the quote currency and is
+        converted to USD at the current price."""
+        return self.quote != "USD"
+
+    def usd_per_point(self, price: float) -> float:
+        """USD value of a 1.0 price move for one unit, at `price`."""
+        if self.inverse_quote:
+            return self.point_value / price if price else 0.0
+        return self.point_value
+
+    def tick_value_usd(self, price: float) -> float:
+        return self.usd_per_point(price) * self.tick_size
+
+    def notional_usd(self, qty: float, price: float) -> float:
+        return abs(qty) * price * self.usd_per_point(price)
 
     @property
     def price_decimals(self) -> int:
@@ -202,17 +242,17 @@ class ContractSpec:
         return round(round(price / self.tick_size) * self.tick_size, self.price_decimals)
 
     def fee(self, qty: int, price: float) -> float:
-        notional = abs(qty) * price * self.point_value
-        return abs(qty) * self.fees_per_side + notional * self.fees_per_side_rate
+        return abs(qty) * self.fees_per_side + self.notional_usd(qty, price) * self.fees_per_side_rate
 
     def margin_per_contract(self, price: float, day: bool) -> float:
         if self.margin.initial_rate:
-            return price * self.point_value * self.margin.initial_rate
+            rate = self.margin.intraday_rate if (day and self.margin.intraday_rate) else self.margin.initial_rate
+            return self.notional_usd(1, price) * rate
         return self.margin.intraday if day else self.margin.initial
 
     def maintenance_per_contract(self, price: float, day: bool) -> float:
         if self.margin.maintenance_rate:
-            return price * self.point_value * self.margin.maintenance_rate
+            return self.notional_usd(1, price) * self.margin.maintenance_rate
         return self.margin.intraday if day else self.margin.maintenance
 
     def to_dict(self) -> dict:
@@ -237,6 +277,9 @@ class ContractSpec:
             "margin": self.margin.__dict__,
             "fees_per_side": self.fees_per_side,
             "fees_per_side_rate": self.fees_per_side_rate,
+            "asset_class": self.asset_class,
+            "unit": self.unit,
+            "quote": self.quote,
             "spread_ticks": {"rth": self.spread_rth, "eth": self.spread_eth, "open": self.spread_open,
                              "open_minutes": self.spread_open_minutes},
         }
@@ -264,6 +307,9 @@ class ContractRegistry:
             )
         self.contracts: dict[str, ContractSpec] = {}
         for sym, c in raw.get("contracts", {}).items():
+            if sym.startswith("_"):  # YAML anchors / templates
+                continue
+            sym = str(sym).upper()
             self.contracts[sym] = ContractSpec(
                 symbol=sym,
                 name=c.get("name", sym),
@@ -282,6 +328,10 @@ class ContractRegistry:
                 spread_open=float((c.get("spread_ticks") or {}).get("open", 2)),
                 spread_open_minutes=int((c.get("spread_ticks") or {}).get("open_minutes", 1)),
                 synthetic=c.get("synthetic") or {},
+                asset_class=c.get("asset_class") or ("crypto" if c.get("perpetual") else "future"),
+                unit=c.get("unit") or "contract",
+                quote=str(c.get("quote") or "USD").upper(),
+                data=c.get("data") or {},
             )
 
     def get(self, symbol: str) -> ContractSpec:

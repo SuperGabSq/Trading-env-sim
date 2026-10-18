@@ -1,7 +1,7 @@
 # Trading Env Sim
 
-A local, TradingView-style simulator built for **futures**. It runs on your computer and your browser
-is the screen. You can:
+A local, TradingView-style simulator built for **futures**, that also handles **crypto, forex, gold, US
+stocks and ETFs**. It runs on your computer and your browser is the screen. You can:
 
 - chart and paper trade by hand,
 - replay any past session bar by bar,
@@ -89,8 +89,9 @@ It trades the session's account; you can stop it alone or stop it and flatten it
 | Source | Data | Cost |
 |---|---|---|
 | Simulated live | stored minute bars streamed as ticks and quotes at real-time speed (any hour, weekends) | free |
-| Binance perpetuals | real-time trades and bid/ask, BTCUSDT and ETHUSDT | free, no account |
-| Interactive Brokers | real-time CME trades and bid/ask through TWS / IB Gateway (`pip install ib_async`) | about $1.25/month CME top-of-book |
+| Binance perpetuals | real-time trades and bid/ask: BTC, ETH, SOL, XRP, BNB, DOGE | free, no account |
+| Alpaca | real-time US stock and ETF trades and bid/ask (IEX feed: live prices, partial volume) | free account key |
+| Interactive Brokers | real-time CME futures, US stocks/ETFs, forex and spot gold through TWS / IB Gateway (`pip install ib_async`) | CME top-of-book about $1.25/month; forex free |
 
 - Orders always fill in this simulator, never at a broker.
 - A live session is saved every 10 seconds. If the app restarts, it resumes the account, positions,
@@ -151,14 +152,44 @@ Data → *Import a file*, or `python -m sim data import file.csv --symbol MES`. 
 
 Files with a contract column are stitched into a continuous series automatically.
 
-**Crypto perpetuals**
+**Crypto, forex, gold, stocks and ETFs (free)**
 
-Data → *Download crypto perpetuals*, or `python -m sim data binance --symbol BTCUSDT --days 60`.
+Data → *Download free market data*, or `python -m sim data download BTCUSDT EURUSD SPY --start 2024-01-01`
+(`crypto`, `forex`, `stocks`, `etfs` or `all` download a whole group).
+
+| Class | Instruments | Source | History |
+|---|---|---|---|
+| Crypto | BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, DOGEUSDT (USD-M perpetuals) | Binance public archive, no key | 1-minute back to 2020 |
+| Forex & gold | EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, USDCHF, XAUUSD | Dukascopy bid and ask, no key | 1-minute, many years |
+| Stocks | AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD | Alpaca (free key) or Yahoo (no key) | Alpaca: 1-minute since 2016; Yahoo: last 30 days of 1-minute |
+| ETFs | SPY, QQQ, IWM, DIA, TQQQ, GLD, TLT | same as stocks | same as stocks |
+
+- Running a download again only adds the new part. Choosing a different source replaces the series.
+- **Forex** is stored as the bid/ask mid price, so orders pay half the spread like at a broker. The
+  download measures the real median spread and shows it next to the contract's setting.
+- **Stocks** include pre-market and after-hours bars and are split-adjusted (not dividend-adjusted). For
+  Alpaca, put `ALPACA_API_KEY` and `ALPACA_API_SECRET` in `.env` (paper-trading keys work).
+- Yahoo is unofficial and meant for personal use; replay and live sessions need 1-minute bars.
+- Any of these symbols can also be filled from your own CSV files with *Import a file*.
+
+**What a quantity of 1 means**
+
+| Class | Quantity 1 | Tick | Margin (default) | Fees (default) |
+|---|---|---|---|---|
+| Futures | one contract | contract tick | per-contract day/overnight margin | per contract per side |
+| Crypto | one contract of 0.01 BTC, 0.1 ETH, 1 SOL, 10 XRP, 0.1 BNB or 100 DOGE | exchange tick | 5% of notional (20x) | 0.04% of notional |
+| Forex | one micro lot (1,000 units); 100 = one standard lot | pipette (0.00001, JPY 0.001) | 1:30 majors, 1:20 gold (EU retail) | $3.50 per standard lot per side |
+| Stocks / ETFs | one share | $0.01 | 25% intraday (4x), 50% overnight (2x) | $0.005 per share |
+
+USD-base pairs (USDJPY, USDCAD, USDCHF) earn profit in the quote currency; the simulator converts it
+to USD at the current rate. Not modelled yet: forex swaps, stock dividends, short-borrow fees, halts
+and holidays.
 
 **Contract specs**
 
 `config/contracts.yaml` defines tick size and value, sessions, margins, fees and typical spreads. The
-margin and fee values are approximate starting points; edit them to match your broker.
+margin and fee values are approximate starting points; edit them to match your broker. To add another
+stock or ETF, copy one line such as `AMD:  {<<: *stock, name: Advanced Micro Devices}` and restart.
 
 ---
 
@@ -284,10 +315,11 @@ clients never need it.
 .venv\Scripts\python -m sim data bars --root ES  # free real ES minute bars, stored as MES
 .venv\Scripts\python -m sim data import export.csv --symbol MES --tz America/Chicago
 .venv\Scripts\python -m sim data databento --symbol MES --start 2025-01-01 --end 2026-10-01
-.venv\Scripts\python -m sim data binance --symbol BTCUSDT --days 60
+.venv\Scripts\python -m sim data download BTCUSDT EURUSD XAUUSD SPY --start 2024-01-01
+.venv\Scripts\python -m sim data download stocks --source yahoo
 .venv\Scripts\python -m sim data generate --days 365
 .venv\Scripts\python -m sim backtest pats_second_entry --start 2026-01-01 --param target_ticks=8 --out report.json
-.venv\Scripts\python -m pytest                   # 95 tests
+.venv\Scripts\python -m pytest                   # 114 tests
 ```
 
 ---
@@ -296,15 +328,15 @@ clients never need it.
 
 ```
 backend/sim/
-  contracts.py     contract registry + CME session calendar
-  data/            Parquet store, resampling, continuous contracts, importers, synthetic data
+  contracts.py     contract registry + session calendars (CME, 24/7 crypto, 24/5 forex, US stocks)
+  data/            Parquet store, resampling, continuous contracts, importers, free downloaders, synthetic data
   engine/          orders, matching, positions, fees, margin, rolls
   indicators.py    indicators shared by chart and strategies
   session.py       replay and live sessions (clock, feeds, strategies)
-  feeds/           simulated, Binance and IBKR live feeds
+  feeds/           simulated, Binance, Alpaca and IBKR live feeds
   strategy/        Strategy API, backtest runner, statistics, in-session runner
   api/             REST + WebSocket endpoints
-backend/tests/     95 tests (engine scenarios, data, indicators, strategies, API, live)
+backend/tests/     114 tests (engine scenarios, data, downloaders, indicators, strategies, API, live)
 frontend/          React + TypeScript + Lightweight Charts (built into frontend/dist)
 strategies/        your strategies
 clients/python/    Python client and example bots
@@ -325,4 +357,9 @@ server is http://127.0.0.1:5173. When you're done, run `npm run build`.
   real money, validate on Databento data.
 - The IBKR feed is written against the `ib_async` API but could not be tested here without a TWS
   connection. The Binance feed is tested with recorded messages, not the live network.
+- The Binance archive, Dukascopy, Alpaca and Yahoo downloaders and the Alpaca live feed follow each
+  service's published formats and are tested with recorded-format samples; they could not be run
+  against the real services from the build machine. If one fails, the Data page shows the error.
+- The example strategies were written for CME index futures hours (Central time). On other markets,
+  change their session times or write strategies that use `self.spec.session`.
 - Exchange margins and broker fees change often; keep `config/contracts.yaml` up to date.

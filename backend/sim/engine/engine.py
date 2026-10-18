@@ -677,7 +677,7 @@ class Engine:
             tr.fees += fee
             return 0.0
         close = min(qty, abs(pos.qty))
-        realized = (price - pos.avg_price) * close * (1 if pos.qty > 0 else -1) * spec.point_value
+        realized = (price - pos.avg_price) * close * (1 if pos.qty > 0 else -1) * spec.usd_per_point(price)
         pos.qty += s * close
         pos.realized += realized
         tr = acct.open_trades[spec.symbol]
@@ -816,7 +816,7 @@ class Engine:
             if pos.qty == 0 or (symbol and sym != symbol):
                 continue
             last = self.last.get(sym, pos.avg_price)
-            total += (last - pos.avg_price) * pos.qty * self.spec(sym).point_value
+            total += (last - pos.avg_price) * pos.qty * self.spec(sym).usd_per_point(last)
         return total
 
     def equity(self, account: str) -> float:

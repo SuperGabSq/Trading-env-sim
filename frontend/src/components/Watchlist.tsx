@@ -1,5 +1,5 @@
 import { useStore } from '../store'
-import { fmtPrice } from '../format'
+import { fmtPrice, groupByClass } from '../format'
 
 export default function Watchlist() {
   const symbols = useStore((s) => s.symbols)
@@ -9,12 +9,15 @@ export default function Watchlist() {
   const positions = useStore((s) => s.positions)
   const setPrefs = useStore((s) => s.setPrefs)
   const set = useStore((s) => s.set)
+  const groups = new Set(symbols.map((s) => s.contract?.asset_class ?? 'other')).size
 
   return (
     <aside className="watch" aria-label="Watchlist">
       <div className="section-title"><span>Watchlist</span></div>
       <div role="listbox" aria-label="Symbols">
-        {symbols.map((s) => {
+        {groupByClass(symbols, (s) => s.contract?.asset_class).map((g) => [
+          groups > 1 ? <div key={'g-' + g.id} className="watch-group" role="presentation">{g.label}</div> : null,
+          ...g.items.map((s) => {
           const c = s.contract
           const px = last[s.symbol] ?? s.last_close ?? undefined
           const pos = positions[s.symbol]
@@ -35,7 +38,7 @@ export default function Watchlist() {
               </span>
             </div>
           )
-        })}
+        })])}
       </div>
       {!symbols.length && (
         <div className="empty">No market data yet. <button className="btn small" onClick={() => set({ page: 'data' })}>Open Data</button></div>

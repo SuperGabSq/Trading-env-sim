@@ -6,7 +6,7 @@ import {
   type UTCTimestamp, type WhitespaceData,
 } from 'lightweight-charts'
 import { api, socket } from '../api'
-import { fmtMoney, fmtPrice, roundTick, toChartTime } from '../format'
+import { fmtMoney, fmtPrice, roundTick, toChartTime, usdPerPoint } from '../format'
 import { useStore } from '../store'
 import type { BarsColumns, ContractInfo, IndicatorSpec, Order, WireBar } from '../types'
 import { DrawingsPrimitive, type Drawing } from './drawings'
@@ -463,8 +463,7 @@ export default function Chart() {
       if (posLine.current) { candle.removePriceLine(posLine.current); posLine.current = null }
       return
     }
-    const pv = contract?.point_value ?? 1
-    const pnl = last !== undefined ? (last - p.avg_price) * p.qty * pv : 0
+    const pnl = last !== undefined ? (last - p.avg_price) * p.qty * (contract ? usdPerPoint(contract, last) : 1) : 0
     const opts = {
       price: p.avg_price, color: css('--amber'), lineWidth: 2 as const, lineStyle: LineStyle.Solid, axisLabelVisible: true,
       title: `${p.qty > 0 ? 'Long' : 'Short'} ${Math.abs(p.qty)}  ${fmtMoney(pnl, true)}`,

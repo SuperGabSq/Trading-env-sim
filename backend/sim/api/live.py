@@ -11,7 +11,8 @@ from ..contracts import registry
 from ..data.store import store
 from ..db import db
 from ..engine import FillConfig, RiskConfig
-from ..feeds import ibkr
+from ..feeds import alpaca, ibkr
+from ..feeds.alpaca import AlpacaFeed
 from ..feeds.binance import BinanceFeed
 from ..feeds.ibkr import IBKRFeed
 from ..feeds.simulated import SimulatedFeed
@@ -25,7 +26,8 @@ log = logging.getLogger("tsim")
 def _sources() -> list[dict]:
     minute = [s for s in store().symbols() if s in registry() and store().meta(s).base_tf == "1m"]
     perps = [c.symbol for c in registry().all() if c.exchange == "BINANCE"]
-    cme = [c.symbol for c in registry().all() if c.exchange in ("CME", "CBOT", "COMEX", "NYMEX")]
+    ib = [c.symbol for c in registry().all() if c.asset_class in ("future", "stock", "etf", "forex")]
+    stocks = [c.symbol for c in registry().all() if c.asset_class in ("stock", "etf")]
     return [
         {"id": "simulated", "label": "Simulated live: stored data replayed at real-time speed", "symbols": minute,
          "available": bool(minute),
@@ -35,10 +37,17 @@ def _sources() -> list[dict]:
         {"id": "binance", "label": "Binance perpetual futures (free, real time)", "symbols": perps, "available": True,
          "note": "Public trade and order-book streams from Binance USD-M futures; no account or key needed. "
                  "Needs internet access to fstream.binance.com."},
-        {"id": "ibkr", "label": "Interactive Brokers: CME futures (needs TWS / IB Gateway)", "symbols": cme,
-         "available": ibkr.available(),
-         "note": ("Live CME trades and bid/ask through your running TWS or IB Gateway (API enabled, CME market data "
-                  "subscription). Orders stay in this simulator." if ibkr.available() else
+        {"id": "alpaca", "label": "Alpaca: US stocks and ETFs (free account key, real time)", "symbols": stocks,
+         "available": alpaca.available(),
+         "note": ("Real-time trades and quotes from the free IEX feed (prices are live; volume is IEX only, a few "
+                  "percent of the market). Orders stay in this simulator." if alpaca.available() else
+                  "Create a free account at alpaca.markets and put ALPACA_API_KEY and ALPACA_API_SECRET in .env, "
+                  "then restart.")},
+        {"id": "ibkr", "label": "Interactive Brokers: futures, stocks, ETFs, forex, gold (needs TWS / IB Gateway)",
+         "symbols": ib, "available": ibkr.available(),
+         "note": ("Live trades and bid/ask through your running TWS or IB Gateway (API enabled, market data "
+                  "subscriptions for the instruments; forex quotes are free). Orders stay in this simulator."
+                  if ibkr.available() else
                   "Install the connector first:  .venv\\Scripts\\pip install ib_async  then restart.")},
     ]
 
@@ -70,6 +79,10 @@ def _adapter(source: str, sess: TradingSession, symbols: list[str], start: int |
         if not ibkr.available():
             raise HTTPException(400, "The ib_async package is not installed")
         return IBKRFeed(sess, symbols)
+    if source == "alpaca":
+        if not alpaca.available():
+            raise HTTPException(400, "Set ALPACA_API_KEY and ALPACA_API_SECRET in .env first")
+        return AlpacaFeed(sess, symbols)
     raise HTTPException(400, f"Unknown source {source}")
 
 

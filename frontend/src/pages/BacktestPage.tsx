@@ -4,7 +4,7 @@ import {
   type IChartApi, type SeriesMarker, type Time, type UTCTimestamp,
 } from 'lightweight-charts'
 import { api } from '../api'
-import { fmtMoney, fmtNum, fmtPrice, fmtTime, pnlClass, toChartTime } from '../format'
+import { fmtMoney, fmtNum, fmtPrice, fmtTime, groupByClass, pnlClass, toChartTime, tradeTicks, tzLabel } from '../format'
 import { useStore } from '../store'
 import type { BarsColumns, Fill, Trade } from '../types'
 import { ParamInput, type StrategyInfo } from '../components/StrategyPanel'
@@ -183,7 +183,10 @@ function StrategyForm({ strategies, onStarted }: { strategies: StrategyInfo[]; o
       <div className="row2">
         <label className="field"><span>Instrument</span>
           <select value={symbol} onChange={(e) => setSymbol(e.target.value)}>
-            {symbols.map((s) => <option key={s.symbol} value={s.symbol}>{s.symbol}{s.synthetic ? ' (sample)' : ''}</option>)}
+            {groupByClass(symbols, (s) => s.contract?.asset_class).map((g) => (
+              <optgroup key={g.id} label={g.label}>
+                {g.items.map((s) => <option key={s.symbol} value={s.symbol}>{s.symbol}{s.synthetic ? ' (sample)' : ''}{s.base_tf !== '1m' ? ` (${s.base_tf})` : ''}</option>)}
+              </optgroup>))}
           </select></label>
         <label className="field"><span>Bar size</span>
           <select value={tf} onChange={(e) => setTf(e.target.value)}>{TFS.map((t) => <option key={t}>{t}</option>)}</select></label>
@@ -329,11 +332,11 @@ function Report({ run, r }: { run: RunRecord; r: Result }) {
         <div style={{ padding: '12px 16px 4px' }}><h2>Trades</h2><p className="help">Click a trade to see it on the chart.</p></div>
         <div className="table-wrap" style={{ maxHeight: 480 }}>
           <table className="grid">
-            <thead><tr><th>#</th><th>Entry ({tz === 'UTC' ? 'UTC' : 'CT'})</th><th>Side</th><th className="num">Qty</th><th className="num">Entry</th><th className="num">Exit</th>
+            <thead><tr><th>#</th><th>Entry ({tzLabel(tz)})</th><th>Side</th><th className="num">Qty</th><th className="num">Entry</th><th className="num">Exit</th>
               <th className="num">Ticks</th><th className="num">Net</th><th className="num">MAE</th><th className="num">MFE</th><th className="num">Minutes</th><th>Exit</th></tr></thead>
             <tbody>
               {r.trades.slice(0, limit).map((t, i) => {
-                const ticks = c && t.qty ? t.pnl / (t.qty * c.tick_value) : 0
+                const ticks = tradeTicks(t, c)
                 return (
                   <tr key={t.id} onClick={() => setSel(t)} style={{ cursor: 'pointer', background: sel?.id === t.id ? 'var(--raised)' : undefined }}>
                     <td className="faint">{i + 1}</td><td>{fmtTime(t.entry_ts, tz)}</td>

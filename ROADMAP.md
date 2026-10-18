@@ -3,7 +3,7 @@
 A local, TradingView-style app built for **futures**: chart the market, trade by hand, replay
 history bar by bar, backtest strategies, plug in your own bots, and paper trade in real time.
 
-## Status (updated 2026-10-17)
+## Status (updated 2026-10-18)
 
 | Phase | Status |
 |---|---|
@@ -16,6 +16,7 @@ history bar by bar, backtest strategies, plug in your own bots, and paper trade 
 | 5 Strategy backtesting | Done (M2): PATS ported, signal logic verified against the old pats_engine.py |
 | 6 Real-time paper trading | Done: simulated live, Binance perpetuals, IBKR (not tested without TWS) |
 | 7 External bot API | Done (M3): REST, WebSocket events, lock-step backtests, Python client |
+| Multi-asset | Done: crypto (Binance archive), forex and gold (Dukascopy), US stocks and ETFs (Alpaca or Yahoo); live via Binance, Alpaca, IBKR. Downloaders not yet run against the real services |
 | 8 Advanced | Not started: pick the items you want |
 
 Open items: compare PATS with TradingView's Strategy Tester on the same MES data (needs a TradingView

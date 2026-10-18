@@ -29,7 +29,7 @@ def max_drawdown(equity: np.ndarray) -> tuple[float, float, int, int]:
 
 
 def compute_stats(trades: list[dict], eq_ts: np.ndarray, eq: np.ndarray, days: list[dict], balance: float,
-                  tick_value: float, tz: str) -> dict:
+                  tick_value: float, tz: str, tick_size: float | None = None) -> dict:
     zone = ZoneInfo(tz)
     n = len(trades)
     nets = np.array([t["net"] for t in trades], dtype=float) if n else np.zeros(0)
@@ -53,7 +53,11 @@ def compute_stats(trades: list[dict], eq_ts: np.ndarray, eq: np.ndarray, days: l
     ticks = []
     for t in trades:
         q = t["qty"] or 1
-        ticks.append(t["pnl"] / (q * tick_value) if tick_value else 0.0)
+        if tick_size and t.get("exit_price") is not None:  # price-based: right for any quote currency
+            sign = 1 if t.get("side") == "long" else -1
+            ticks.append((t["exit_price"] - t["entry_price"]) * sign / tick_size)
+        else:
+            ticks.append(t["pnl"] / (q * tick_value) if tick_value else 0.0)
     ticks = np.array(ticks) if ticks else np.zeros(0)
     durations = [(t["exit_ts"] - t["entry_ts"]) for t in trades if t.get("exit_ts")]
 

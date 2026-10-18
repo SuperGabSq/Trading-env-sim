@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import { tzLabel, utcToWall, wallToUtc } from '../format'
+import { groupByClass, tzLabel, utcToWall, wallToUtc } from '../format'
 import { useStore } from '../store'
 
 interface LiveSource { id: string; label: string; symbols: string[]; available: boolean; note: string }
@@ -22,6 +22,7 @@ export default function SessionDialog() {
 
 function Dialog({ onClose }: { onClose: () => void }) {
   const symbols = useStore((s) => s.symbols)
+  const contracts = useStore((s) => s.contracts)
   const current = useStore((s) => s.symbol)
   const toast = useStore((s) => s.toast)
   const [tab, setTab] = useState<'replay' | 'live'>(getTab)
@@ -118,12 +119,17 @@ function Dialog({ onClose }: { onClose: () => void }) {
               <p className="help">Replay history bar by bar and trade it as if it were live. Charts never show data past the replay clock.</p>
               <fieldset>
                 <legend>Instruments</legend>
-                {minute.map((s) => (
-                  <label key={s.symbol} className="check">
-                    <input type="checkbox" checked={picked.includes(s.symbol)}
-                      onChange={(e) => setPicked(e.target.checked ? [...picked, s.symbol] : picked.filter((x) => x !== s.symbol))} />
-                    {s.symbol} <span className="muted">{s.contract?.name}</span> {s.synthetic && <span className="badge synthetic">sample</span>}
-                  </label>
+                {groupByClass(minute, (s) => s.contract?.asset_class).map((g) => (
+                  <div key={g.id} className="check-group">
+                    <div className="group-label">{g.label}</div>
+                    {g.items.map((s) => (
+                      <label key={s.symbol} className="check">
+                        <input type="checkbox" checked={picked.includes(s.symbol)}
+                          onChange={(e) => setPicked(e.target.checked ? [...picked, s.symbol] : picked.filter((x) => x !== s.symbol))} />
+                        {s.symbol} <span className="muted">{s.contract?.name}</span> {s.synthetic && <span className="badge synthetic">sample</span>}
+                      </label>
+                    ))}
+                  </div>
                 ))}
                 {!minute.length && <p className="help">No 1-minute data available. Import or generate data first.</p>}
               </fieldset>
@@ -162,12 +168,19 @@ function Dialog({ onClose }: { onClose: () => void }) {
               {src && (
                 <fieldset>
                   <legend>Instruments</legend>
-                  {src.symbols.map((s) => (
-                    <label key={s} className="check">
-                      <input type="checkbox" checked={liveSymbols.includes(s)}
-                        onChange={(e) => setLiveSymbols(e.target.checked ? [...liveSymbols, s] : liveSymbols.filter((x) => x !== s))} />
-                      {s}
-                    </label>
+                  {groupByClass(src.symbols, (s) => contracts.find((c) => c.symbol === s)?.asset_class).map((g) => (
+                    <div key={g.id} className="check-group">
+                      {src.symbols.length > 6 && <div className="group-label">{g.label}</div>}
+                      <div className="check-row">
+                        {g.items.map((s) => (
+                          <label key={s} className="check">
+                            <input type="checkbox" checked={liveSymbols.includes(s)}
+                              onChange={(e) => setLiveSymbols(e.target.checked ? [...liveSymbols, s] : liveSymbols.filter((x) => x !== s))} />
+                            {s}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                   ))}
                 </fieldset>
               )}

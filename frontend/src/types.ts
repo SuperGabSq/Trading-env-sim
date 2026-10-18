@@ -12,7 +12,13 @@ export interface ContractInfo {
   margin: Record<string, number>
   fees_per_side: number
   fees_per_side_rate: number
+  asset_class: AssetClass
+  unit: string
+  quote: string
+  spread_ticks?: { rth: number; eth: number; open: number; open_minutes: number }
 }
+
+export type AssetClass = 'future' | 'crypto' | 'forex' | 'stock' | 'etf'
 
 export interface Roll { ts: number; from_contract: string; to_contract: string; gap: number }
 

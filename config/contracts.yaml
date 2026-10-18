@@ -14,6 +14,16 @@
 #                    unless a live feed provides real quotes.
 #   roll_days        calendar days before expiry when the continuous series moves to the next contract
 #   synthetic        parameters for the sample-data generator only
+#
+# Non-futures instruments use the same fields, plus:
+#   asset_class      future | crypto | forex | stock | etf   (groups symbols in the app)
+#   unit             what a quantity of 1 means: a contract, a share, a micro lot of 1,000 units...
+#   quote            currency of prices and tick_value. Non-USD (USDJPY -> JPY) means profit is
+#                    converted to USD at the current price.
+#   margin.*_rate    margin as a fraction of notional value. intraday_rate applies until
+#                    session.day_margin_end (stocks: 4x day-trading buying power, 2x overnight)
+#   fees_per_side_rate  fee as a fraction of notional, per side (added to fees_per_side)
+#   data             where the free downloader gets history (Binance symbol, Dukascopy code...)
 
 sessions:
   cme_equity:
@@ -37,6 +47,27 @@ sessions:
     open_days: [sun, mon, tue, wed, thu, fri, sat]
     rth: ["00:00", "24:00"]
     day_margin_end: null    # crypto perps: one margin level all the time
+  forex_24x5:
+    tz: America/New_York
+    open: "17:00"           # Sunday 17:00 New York opens Monday's session; each day rolls over at 17:00
+    close: "17:00"
+    open_days: [sun, mon, tue, wed, thu]
+    rth: ["03:00", "12:00"] # London open to New York midday: the most liquid hours
+    day_margin_end: null
+  metals_spot:
+    tz: America/New_York
+    open: "18:00"           # spot gold: daily one-hour break at 17:00-18:00 New York
+    close: "17:00"
+    open_days: [sun, mon, tue, wed, thu]
+    rth: ["08:20", "13:30"] # COMEX pit hours, when gold is most active
+    day_margin_end: null
+  us_equity:
+    tz: America/New_York
+    open: "04:00"           # pre-market from 04:00, regular hours 09:30-16:00, after-hours until 20:00
+    close: "20:00"
+    open_days: [mon, tue, wed, thu, fri]
+    rth: ["09:30", "16:00"]
+    day_margin_end: "16:00" # day-trading margin (4x) during regular hours, overnight margin (2x) after
 
 contracts:
   MES:
@@ -141,6 +172,8 @@ contracts:
   # change multiplier-related values (tick_value) if you prefer another contract size.
   BTCUSDT:
     name: BTC/USDT Perpetual (0.01 BTC per contract)
+    asset_class: crypto
+    unit: contract (0.01 BTC)
     exchange: BINANCE
     tick_size: 0.10
     tick_value: 0.001
@@ -154,6 +187,8 @@ contracts:
 
   ETHUSDT:
     name: ETH/USDT Perpetual (0.1 ETH per contract)
+    asset_class: crypto
+    unit: contract (0.1 ETH)
     exchange: BINANCE
     tick_size: 0.01
     tick_value: 0.001
@@ -164,3 +199,178 @@ contracts:
     fees_per_side_rate: 0.0004
     fees_per_side: 0
     spread_ticks: {rth: 1, eth: 1, open: 1}
+
+  SOLUSDT:
+    name: SOL/USDT Perpetual (1 SOL per contract)
+    asset_class: crypto
+    unit: contract (1 SOL)
+    exchange: BINANCE
+    tick_size: 0.01
+    tick_value: 0.01
+    session: crypto_24x7
+    months: ""
+    perpetual: true
+    margin: {initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side_rate: 0.0004
+    spread_ticks: {rth: 1, eth: 1, open: 1}
+
+  XRPUSDT:
+    name: XRP/USDT Perpetual (10 XRP per contract)
+    asset_class: crypto
+    unit: contract (10 XRP)
+    exchange: BINANCE
+    tick_size: 0.0001
+    tick_value: 0.001
+    session: crypto_24x7
+    months: ""
+    perpetual: true
+    margin: {initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side_rate: 0.0004
+    spread_ticks: {rth: 1, eth: 1, open: 1}
+
+  BNBUSDT:
+    name: BNB/USDT Perpetual (0.1 BNB per contract)
+    asset_class: crypto
+    unit: contract (0.1 BNB)
+    exchange: BINANCE
+    tick_size: 0.01
+    tick_value: 0.001
+    session: crypto_24x7
+    months: ""
+    perpetual: true
+    margin: {initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side_rate: 0.0004
+    spread_ticks: {rth: 1, eth: 1, open: 1}
+
+  DOGEUSDT:
+    name: DOGE/USDT Perpetual (100 DOGE per contract)
+    asset_class: crypto
+    unit: contract (100 DOGE)
+    exchange: BINANCE
+    tick_size: 0.00001
+    tick_value: 0.001
+    session: crypto_24x7
+    months: ""
+    perpetual: true
+    margin: {initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side_rate: 0.0004
+    spread_ticks: {rth: 1, eth: 1, open: 1}
+
+  # ---- Forex (spot, as traded at an ECN broker) -------------------------------------------------
+  # Quantity 1 = one micro lot of 1,000 units of the base currency; 10 = mini lot, 100 = standard lot.
+  # Prices have 5 decimals (3 for JPY pairs); one tick is a pipette, a tenth of a pip.
+  # Margin: EU retail leverage (ESMA) 1:30 on majors, 1:20 on gold; stop-out at half of that.
+  # Fees: $3.50 per side per standard lot ($0.035 per micro lot). Spreads are raw ECN spreads in
+  # pipettes; Dukascopy downloads report the measured median spread so you can tune them.
+  # Not modelled: overnight swap (rollover interest).
+  _forex: &forex
+    asset_class: forex
+    unit: micro lot (1,000 units)
+    exchange: FX
+    session: forex_24x5
+    months: ""
+    perpetual: true
+    margin: {initial_rate: 0.0334, maintenance_rate: 0.0167}
+    fees_per_side: 0.035
+
+  EURUSD:
+    <<: *forex
+    name: Euro / US Dollar
+    tick_size: 0.00001
+    tick_value: 0.01
+    spread_ticks: {rth: 2, eth: 5, open: 5}
+    data: {dukascopy: EURUSD, point: 100000}
+
+  GBPUSD:
+    <<: *forex
+    name: British Pound / US Dollar
+    tick_size: 0.00001
+    tick_value: 0.01
+    spread_ticks: {rth: 4, eth: 10, open: 8}
+    data: {dukascopy: GBPUSD, point: 100000}
+
+  USDJPY:
+    <<: *forex
+    name: US Dollar / Japanese Yen
+    tick_size: 0.001
+    tick_value: 1.0          # 1 JPY per pipette per micro lot, converted to USD at the current rate
+    quote: JPY
+    spread_ticks: {rth: 3, eth: 8, open: 6}
+    data: {dukascopy: USDJPY, point: 1000}
+
+  AUDUSD:
+    <<: *forex
+    name: Australian Dollar / US Dollar
+    tick_size: 0.00001
+    tick_value: 0.01
+    spread_ticks: {rth: 3, eth: 8, open: 6}
+    data: {dukascopy: AUDUSD, point: 100000}
+
+  USDCAD:
+    <<: *forex
+    name: US Dollar / Canadian Dollar
+    tick_size: 0.00001
+    tick_value: 0.01
+    quote: CAD
+    spread_ticks: {rth: 4, eth: 10, open: 8}
+    data: {dukascopy: USDCAD, point: 100000}
+
+  USDCHF:
+    <<: *forex
+    name: US Dollar / Swiss Franc
+    tick_size: 0.00001
+    tick_value: 0.01
+    quote: CHF
+    spread_ticks: {rth: 4, eth: 10, open: 8}
+    data: {dukascopy: USDCHF, point: 100000}
+
+  XAUUSD:
+    <<: *forex
+    name: Gold spot / US Dollar
+    unit: ounce
+    session: metals_spot
+    tick_size: 0.01
+    tick_value: 0.01
+    margin: {initial_rate: 0.05, maintenance_rate: 0.025}
+    fees_per_side: 0.0
+    spread_ticks: {rth: 15, eth: 30, open: 30}
+    data: {dukascopy: XAUUSD, point: 1000}
+
+  # ---- US stocks and ETFs ---------------------------------------------------------------------
+  # Quantity = shares. Prices are split-adjusted when downloaded. Margin follows Reg T: 4x buying
+  # power during regular hours (pattern day trader, $25k+ accounts), 2x overnight, 25% maintenance.
+  # Fees: $0.005 per share per side (Interactive Brokers fixed; set 0 for commission-free brokers).
+  # Not modelled: short borrow fees, dividends, halts, the $1 minimum commission.
+  _stock: &stock
+    asset_class: stock
+    unit: share
+    exchange: NASDAQ
+    session: us_equity
+    months: ""
+    perpetual: true
+    tick_size: 0.01
+    tick_value: 0.01
+    margin: {initial_rate: 0.5, maintenance_rate: 0.25, intraday_rate: 0.25}
+    fees_per_side: 0.005
+    spread_ticks: {rth: 1, eth: 4, open: 3}
+  _etf: &etf
+    <<: *stock
+    asset_class: etf
+    exchange: NYSE ARCA
+
+  AAPL:  {<<: *stock, name: Apple}
+  MSFT:  {<<: *stock, name: Microsoft}
+  NVDA:  {<<: *stock, name: NVIDIA}
+  TSLA:  {<<: *stock, name: Tesla, spread_ticks: {rth: 2, eth: 6, open: 5}}
+  AMZN:  {<<: *stock, name: Amazon}
+  META:  {<<: *stock, name: Meta Platforms, spread_ticks: {rth: 2, eth: 8, open: 5}}
+  GOOGL: {<<: *stock, name: Alphabet Class A}
+  AMD:   {<<: *stock, name: Advanced Micro Devices}
+
+  SPY:   {<<: *etf, name: SPDR S&P 500 ETF}
+  QQQ:   {<<: *etf, name: Invesco QQQ (Nasdaq-100), exchange: NASDAQ}
+  IWM:   {<<: *etf, name: iShares Russell 2000 ETF}
+  DIA:   {<<: *etf, name: SPDR Dow Jones Industrial Average ETF}
+  TQQQ:  {<<: *etf, name: ProShares UltraPro QQQ (3x Nasdaq-100), exchange: NASDAQ}
+  GLD:   {<<: *etf, name: SPDR Gold Shares}
+  TLT:   {<<: *etf, name: iShares 20+ Year Treasury Bond ETF, exchange: NASDAQ}
